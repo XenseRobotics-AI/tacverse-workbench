@@ -134,6 +134,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertEqual(1, win.bar.value())
         self.assertTrue(win.btn_download.isEnabled())
         self.assertIn("下载完成", win.status.text())
+        self.assertIn(worker, win._retired_download_workers)
         if win._download_message_box is not None:
             win._download_message_box.close()
 
@@ -162,6 +163,25 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("下载完成后刷新表格失败", win.status.text())
         worker.deleteLater()
         win._download_workers = []
+
+    def test_download_done_after_worker_release_is_safe(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        worker.deleteLater()
+        QApplication.processEvents()
+
+        with patch.object(win, "_refresh_table"):
+            win._on_download_one_done(
+                str(Path(main_app.OUT_DIR) / "test-dataset"))
+
+        self.assertEqual([], win._download_workers)
 
     def test_stats_done_refresh_failure_is_reported_not_raised(self):
         report = {

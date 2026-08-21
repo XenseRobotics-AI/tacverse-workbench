@@ -1109,6 +1109,7 @@ class MainWindow(QWidget):
         self._download_completed = 0
         self._download_successes = []
         self._download_failures = []
+        self._retired_download_workers = []
         self._download_message_box = None
         self._stats_worker = None
         self._closing = False
@@ -4720,9 +4721,6 @@ class MainWindow(QWidget):
         self._refresh_action_states()
 
     def _on_download_one_done(self, local_dir):
-        worker = self.sender()
-        if worker is not None:
-            worker.local_dir = local_dir
         refresh_ok = True
         try:
             # The newly downloaded row now shows 已下载.  Keep this guarded:
@@ -4739,7 +4737,10 @@ class MainWindow(QWidget):
         """Show a download failure; other workers keep running."""
         worker = self.sender()
         if worker is not None:
-            worker.error_msg = msg
+            try:
+                worker.error_msg = msg
+            except RuntimeError:
+                pass
         self.status.setText(f"错误: {msg}")
         QMessageBox.critical(self, "错误", msg)
         self._refresh_download_progress()
@@ -4764,11 +4765,22 @@ class MainWindow(QWidget):
             elif worker.error_msg:
                 self._download_failures.append(worker.error_msg)
         if worker is not None:
-            worker.deleteLater()
+            self._retired_download_workers.append(worker)
+            QTimer.singleShot(
+                0, lambda w=worker: self._release_download_worker(w))
         self._refresh_download_progress()
         if not self._download_workers:
             self._finish_download_batch()
         self._refresh_action_states()
+
+    def _release_download_worker(self, worker):
+        """Release a finished download QThread after queued signals settle."""
+        try:
+            if worker in self._retired_download_workers:
+                self._retired_download_workers.remove(worker)
+            worker.deleteLater()
+        except RuntimeError:
+            pass
 
     def _refresh_download_progress(self):
         if self._download_workers:
