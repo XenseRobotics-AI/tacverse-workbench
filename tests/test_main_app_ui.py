@@ -126,7 +126,8 @@ class MainWindowUiTests(unittest.TestCase):
         win.status.setText("开始下载 TacVerse/test-dataset ...")
         win._set_busy(True)
 
-        with patch.object(win, "sender", return_value=worker):
+        with patch.object(win, "sender", return_value=worker), \
+                patch.object(main_app.QTimer, "singleShot") as single_shot:
             win._on_download_worker_finished()
 
         self.assertEqual("—", win.speed_label.text())
@@ -135,6 +136,11 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertTrue(win.btn_download.isEnabled())
         self.assertIn("下载完成", win.status.text())
         self.assertIn(worker, win._retired_download_workers)
+        single_shot.assert_called_once()
+        self.assertEqual(
+            main_app.DOWNLOAD_WORKER_RELEASE_DELAY_MS,
+            single_shot.call_args.args[0],
+        )
         if win._download_message_box is not None:
             win._download_message_box.close()
 
@@ -182,6 +188,24 @@ class MainWindowUiTests(unittest.TestCase):
                 str(Path(main_app.OUT_DIR) / "test-dataset"))
 
         self.assertEqual([], win._download_workers)
+
+    def test_releasing_deleted_download_worker_is_safe(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        win._retired_download_workers = [worker]
+        worker.deleteLater()
+        QApplication.processEvents()
+
+        win._release_download_worker(worker)
+
+        self.assertEqual([], win._retired_download_workers)
 
     def test_stats_done_refresh_failure_is_reported_not_raised(self):
         report = {

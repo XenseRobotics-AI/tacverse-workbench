@@ -49,6 +49,7 @@ def _configure_qt_plugin_path():
 _configure_qt_plugin_path()
 
 import pyqtgraph as pg
+from shiboken6 import isValid as qt_is_valid
 from PySide6.QtCore import QDate, Qt, QPoint, QRect, QSize, QThread, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QBrush, QColor, QDesktopServices, QFontDatabase, QIcon, QPalette, QPixmap,
@@ -79,6 +80,7 @@ OUT_DIR = str(Path(DATASETS_ROOT) / DEFAULT_DATASET_ORG)
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"  # logos / image assets
 LOGO_PATH = ASSETS_DIR / "logo.png"
 RECENT_ORGS = ["TacVerse", "Xense"]  # seeds the editable org combo
+DOWNLOAD_WORKER_RELEASE_DELAY_MS = 1000
 
 # Keep the widget palette independent from the host desktop theme.  Mixing
 # Windows' native dark/light palette with light, per-widget QSS made some text
@@ -4488,6 +4490,15 @@ class MainWindow(QWidget):
             workers.remove(worker)
         worker.deleteLater()
 
+    def _qt_object_alive(self, obj):
+        """True while a PySide wrapper still points at a live C++ QObject."""
+        if obj is None:
+            return False
+        try:
+            return bool(qt_is_valid(obj))
+        except RuntimeError:
+            return False
+
     def _on_one_shot_worker_finished(self, attr, worker=None):
         """Release an owned one-shot QThread after its native thread is stopped."""
         worker = worker or self.sender()
@@ -4752,22 +4763,33 @@ class MainWindow(QWidget):
         signal only refreshes the table and status as each dataset lands.
         """
         worker = self.sender()
-        if worker is not None and worker in self._download_workers:
+        worker_alive = self._qt_object_alive(worker)
+        local_dir = ""
+        error_msg = ""
+        if worker_alive:
+            try:
+                local_dir = worker.local_dir
+                error_msg = worker.error_msg
+            except RuntimeError:
+                worker_alive = False
+
+        if worker_alive and worker in self._download_workers:
             self._download_workers.remove(worker)
-            if worker.local_dir:
-                self._download_successes.append(worker.local_dir)
-            elif worker.error_msg:
-                self._download_failures.append(worker.error_msg)
+            if local_dir:
+                self._download_successes.append(local_dir)
+            elif error_msg:
+                self._download_failures.append(error_msg)
             self._download_completed += 1
-        elif worker is not None:
-            if worker.local_dir:
-                self._download_successes.append(worker.local_dir)
-            elif worker.error_msg:
-                self._download_failures.append(worker.error_msg)
-        if worker is not None:
+        elif worker_alive:
+            if local_dir:
+                self._download_successes.append(local_dir)
+            elif error_msg:
+                self._download_failures.append(error_msg)
+        if worker_alive:
             self._retired_download_workers.append(worker)
             QTimer.singleShot(
-                0, lambda w=worker: self._release_download_worker(w))
+                DOWNLOAD_WORKER_RELEASE_DELAY_MS,
+                lambda w=worker: self._release_download_worker(w))
         self._refresh_download_progress()
         if not self._download_workers:
             self._finish_download_batch()
@@ -4778,7 +4800,8 @@ class MainWindow(QWidget):
         try:
             if worker in self._retired_download_workers:
                 self._retired_download_workers.remove(worker)
-            worker.deleteLater()
+            if self._qt_object_alive(worker):
+                worker.deleteLater()
         except RuntimeError:
             pass
 
