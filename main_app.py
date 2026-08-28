@@ -694,7 +694,7 @@ class PullWorker(QThread):
 
 
 class DownloadOneWorker(QThread):
-    """Download a single selected dataset (not the whole org) to save time."""
+    """Download or incrementally sync one selected dataset."""
 
     done = Signal(str)   # local_dir of the downloaded dataset
     log = Signal(str)
@@ -1312,10 +1312,10 @@ class MainWindow(QWidget):
         section_label("数据获取", row1)
         self.btn_stats = QPushButton("刷新统计")
         self.btn_stats.setToolTip("仅获取数据集元信息，不下载 Parquet 和视频，速度最快。")
-        self.btn_download = QPushButton("下载选中")
+        self.btn_download = QPushButton("下载/同步选中")
         self.btn_download.setToolTip(
-            "下载当前表格中选中的一个或多个数据集；"
-            "可 Ctrl/Shift 多选，下载任务并行执行。")
+            "下载或增量同步当前表格中选中的一个或多个数据集；"
+            "已存在的本地目录会补齐新增/缺失文件，可 Ctrl/Shift 多选。")
         self.btn_pull = QPushButton("同步全部")
         self.btn_pull.setToolTip("下载当前组织下全部数据集，速度较慢并占用磁盘空间。")
         for button in (self.btn_stats, self.btn_download, self.btn_pull):
@@ -1331,7 +1331,7 @@ class MainWindow(QWidget):
         self.btn_open.setToolTip("打开本地 datasets/TacVerse/ 目录。")
         self.btn_stats.clicked.connect(self._guarded("刷新统计", self.on_stats))
         self.btn_download.clicked.connect(
-            self._guarded("下载选中数据集", self.on_download_selected))
+            self._guarded("下载/同步选中数据集", self.on_download_selected))
         self.btn_pull.clicked.connect(self._guarded("同步全部数据集", self.on_pull))
         self.btn_check.clicked.connect(self._guarded("检查新增", self.on_check))
         self.btn_manual_stats.clicked.connect(
@@ -4680,7 +4680,7 @@ class MainWindow(QWidget):
         worker.start()
 
     def on_download_selected(self):
-        """Download all datasets selected in the 看板 table in parallel."""
+        """Download/sync all datasets selected in the 看板 table in parallel."""
         datasets = self._selected_datasets()
         if not datasets:
             QMessageBox.warning(self, "提示", "请先在「看板」表格里选中一个数据集。")
@@ -4691,18 +4691,16 @@ class MainWindow(QWidget):
             self._download_successes = []
             self._download_failures = []
         running = {w.repo_id for w in self._download_workers}
-        downloaded = self._downloaded_leaves()
         pending = [
             d for d in datasets
             if d.get("dataset_name") not in running
-            and (d.get("dataset_name") or "").split("/")[-1] not in downloaded
         ]
         if not pending:
             selected_names = {d.get("dataset_name") for d in datasets}
             if selected_names and selected_names.issubset(running):
-                msg = "选中的数据集已在下载中。"
+                msg = "选中的数据集已在下载/同步中。"
             else:
-                msg = "选中的数据集已下载或正在下载，未重复写入本地数据。"
+                msg = "选中的数据集已在下载/同步中，未重复启动。"
             QMessageBox.information(self, "提示", msg)
             return
 
@@ -4726,8 +4724,8 @@ class MainWindow(QWidget):
                 self._guarded("结束下载数据集", self._on_download_worker_finished))
             worker.start()
         skipped = len(datasets) - len(pending)
-        suffix = f"，跳过已下载/下载中 {skipped} 个" if skipped else ""
-        self.status.setText(f"开始下载 {len(pending)} 个数据集{suffix} ...")
+        suffix = f"，跳过下载/同步中 {skipped} 个" if skipped else ""
+        self.status.setText(f"开始下载/同步 {len(pending)} 个数据集{suffix} ...")
         self._refresh_download_progress()
         self._refresh_action_states()
 
@@ -4741,7 +4739,7 @@ class MainWindow(QWidget):
             refresh_ok = False
             self._handle_ui_exception("下载完成后刷新表格", exc, stop_speed=False)
         if refresh_ok and self._download_workers:
-            self.status.setText(f"下载完成: {local_dir}")
+            self.status.setText(f"下载/同步完成: {local_dir}")
         self._refresh_download_progress()
 
     def _on_download_error(self, msg):
@@ -4819,13 +4817,13 @@ class MainWindow(QWidget):
         ok = len(self._download_successes)
         failed = len(self._download_failures)
         if ok == 1 and not failed:
-            msg = f"下载完成: {self._download_successes[0]}"
+            msg = f"下载/同步完成: {self._download_successes[0]}"
         elif ok and not failed:
-            msg = f"下载完成: {ok} 个数据集"
+            msg = f"下载/同步完成: {ok} 个数据集"
         elif ok:
-            msg = f"下载完成: {ok} 个，失败 {failed} 个"
+            msg = f"下载/同步完成: {ok} 个，失败 {failed} 个"
         else:
-            msg = f"下载失败: {failed} 个数据集"
+            msg = f"下载/同步失败: {failed} 个数据集"
         self.status.setText(msg)
         self.bar.setMaximum(1)
         self.bar.setValue(1 if ok else 0)
