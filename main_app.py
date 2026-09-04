@@ -804,8 +804,7 @@ class IdentityWorker(QThread):
         name = ""
         if self.token:
             try:
-                from huggingface_hub import HfApi
-                name = HfApi().whoami(token=self.token).get("name", "") or ""
+                name = dd.fetch_username(self.token)
             except Exception:
                 name = ""  # token present but invalid/expired
         try:

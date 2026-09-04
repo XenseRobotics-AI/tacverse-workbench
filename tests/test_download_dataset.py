@@ -477,6 +477,131 @@ class SnapshotLockTests(unittest.TestCase):
         self.assertIs(first, dd._snapshot_lock_for(Path("datasets/TacVerse/a")))
 
 
+class HubEndpointTests(unittest.TestCase):
+    class _Response:
+        def __init__(self, status_code=401, url="https://huggingface.co/api/datasets/example",
+                     history=()):
+            self.status_code = status_code
+            self.url = url
+            self.history = list(history)
+
+    class _HistoryItem:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def _redirected_auth_error(self):
+        response = self._Response(
+            history=[self._HistoryItem(308)],
+        )
+        error_type = type("RepositoryNotFoundError", (Exception,), {})
+        error = error_type("401 Repository Not Found")
+        error.response = response
+        return error
+
+    def test_configured_mirror_precedes_official_fallback(self):
+        with patch.dict(dd.os.environ, {"HF_ENDPOINT": "https://hf-mirror.com/"}):
+            self.assertEqual(
+                ["https://hf-mirror.com", dd.HF_OFFICIAL_ENDPOINT],
+                dd._hub_endpoint_candidates(),
+            )
+
+    def test_redirected_mirror_auth_error_falls_back(self):
+        error = self._redirected_auth_error()
+        calls = []
+
+        def read(endpoint):
+            calls.append(endpoint)
+            if endpoint == "https://hf-mirror.com":
+                raise error
+            return "official"
+
+        with patch.dict(dd.os.environ, {"HF_ENDPOINT": "https://hf-mirror.com"}), \
+                patch.object(dd, "_configure_hub_endpoint"):
+            self.assertEqual("official", dd._call_hub_with_fallback(read))
+        self.assertEqual(
+            ["https://hf-mirror.com", dd.HF_OFFICIAL_ENDPOINT], calls)
+
+    def test_wrapped_metadata_error_falls_back(self):
+        metadata_type = type("FileMetadataError", (Exception,), {})
+        outer = RuntimeError("metadata lookup failed")
+        outer.__cause__ = metadata_type("missing ETag")
+        calls = []
+
+        def read(endpoint):
+            calls.append(endpoint)
+            if endpoint == "https://hf-mirror.com":
+                raise outer
+            return "official"
+
+        with patch.dict(dd.os.environ, {"HF_ENDPOINT": "https://hf-mirror.com"}), \
+                patch.object(dd, "_configure_hub_endpoint"), \
+                patch.object(dd.time, "sleep"):
+            self.assertEqual("official", dd._call_hub_with_fallback(read))
+        self.assertEqual(
+            ["https://hf-mirror.com"] * 3
+            + [dd.HF_OFFICIAL_ENDPOINT], calls)
+
+    def test_default_endpoint_preserves_none_argument(self):
+        calls = []
+
+        with patch.dict(dd.os.environ, {}, clear=False):
+            dd.os.environ.pop("HF_ENDPOINT", None)
+            with patch.object(dd, "_configure_hub_endpoint"):
+                self.assertEqual(
+                    "ok",
+                    dd._call_hub_with_fallback(
+                        lambda endpoint: calls.append(endpoint) or "ok"))
+        self.assertEqual([None], calls)
+
+    def test_malformed_redirect_history_is_ignored(self):
+        response = self._Response(history=[self._HistoryItem("not-a-status")])
+        self.assertFalse(dd._response_redirected(response))
+
+    def test_fetch_username_uses_fallback_helper(self):
+        with patch.object(
+                dd, "_call_hub_with_fallback", return_value={"name": "tester"}) as call_hub:
+            self.assertEqual("tester", dd.fetch_username("token"))
+        call_hub.assert_called_once()
+
+    def test_existing_local_dir_is_probed_before_snapshot_fallback(self):
+        error = self._redirected_auth_error()
+        with tempfile.TemporaryDirectory() as tmp:
+            local_dir = Path(tmp) / "example"
+            local_dir.mkdir()
+            (local_dir / "old-file").write_text("old", encoding="utf-8")
+            logs = []
+            with patch.dict(
+                    dd.os.environ, {"HF_ENDPOINT": "https://hf-mirror.com"}), \
+                    patch.object(dd, "_configure_hub_endpoint"), \
+                    patch.object(
+                        dd, "_probe_snapshot_endpoint",
+                        side_effect=[error, object()]) as probe, \
+                    patch.object(dd, "_snapshot_with_retries") as snapshot:
+                dd._snapshot_to_local_with_fallback(
+                    "TacVerse/example",
+                    None,
+                    local_dir,
+                    "token",
+                    log=logs.append,
+                )
+
+        self.assertEqual(2, probe.call_count)
+        self.assertEqual(
+            "https://hf-mirror.com",
+            probe.call_args_list[0].args[3],
+        )
+        self.assertEqual(
+            dd.HF_OFFICIAL_ENDPOINT,
+            probe.call_args_list[1].args[3],
+        )
+        snapshot.assert_called_once()
+        self.assertEqual(
+            dd.HF_OFFICIAL_ENDPOINT,
+            snapshot.call_args.kwargs["endpoint"],
+        )
+        self.assertTrue(any("切换到官方端点" in line for line in logs))
+
+
 class PullDatasetRetryTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

@@ -134,7 +134,7 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertEqual(1, win.bar.maximum())
         self.assertEqual(1, win.bar.value())
         self.assertTrue(win.btn_download.isEnabled())
-        self.assertIn("下载完成", win.status.text())
+        self.assertIn("下载/同步完成", win.status.text())
         self.assertIn(worker, win._retired_download_workers)
         single_shot.assert_called_once()
         self.assertEqual(
@@ -362,7 +362,7 @@ class MainWindowUiTests(unittest.TestCase):
             w.deleteLater()
         win._download_workers = []
 
-    def test_download_selected_skips_already_downloaded_rows(self):
+    def test_download_selected_syncs_already_downloaded_rows(self):
         report = {
             "date": "260101",
             "org": "TacVerse",
@@ -419,10 +419,12 @@ class MainWindowUiTests(unittest.TestCase):
                 with patch.object(main_app.DownloadOneWorker, "start") as start:
                     win.on_download_selected()
 
-                start.assert_called_once()
-                self.assertEqual(1, len(win._download_workers))
-                self.assertEqual("TacVerse/test-b", win._download_workers[0].repo_id)
-                self.assertIn("跳过已下载/下载中 1 个", win.status.text())
+                self.assertEqual(2, start.call_count)
+                self.assertEqual(
+                    {"TacVerse/test-a", "TacVerse/test-b"},
+                    {worker.repo_id for worker in win._download_workers},
+                )
+                self.assertIn("开始下载/同步 2 个数据集", win.status.text())
                 for w in win._download_workers:
                     w.deleteLater()
                 win._download_workers = []
