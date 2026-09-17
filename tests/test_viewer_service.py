@@ -123,9 +123,45 @@ class ViewerServiceTests(unittest.TestCase):
             ok, message = self.service.start(self.root)
 
         self.assertTrue(ok)
-        self.assertEqual("启动中…", message)
+        self.assertEqual("启动中…（bun）", message)
         stop_processes.assert_called_once_with(info["root"])
         self.assertIs(process, self.service.proc)
+
+    def test_js_runner_falls_back_to_npm_with_modern_node(self):
+        with patch.object(vsvc, "find_bun", return_value=None), \
+                patch.object(vsvc.shutil, "which", return_value="npm"), \
+                patch.object(vsvc, "node_version", return_value=(20, "20.0.0")):
+            cmd, runner = vsvc.find_js_runner()
+
+        self.assertEqual(["npm", "run", "dev"], cmd)
+        self.assertEqual("npm", runner)
+
+    def test_install_hint_points_to_runtime_copy(self):
+        hint = vsvc.install_hint(self.viewer_dir / "missing")
+
+        self.assertIn("scripts/install_viewer.py", hint)
+
+    def test_prepare_viewer_runtime_copies_source_without_touching_it(self):
+        source = Path(self.tmp.name) / "source"
+        runtime = Path(self.tmp.name) / "runtime"
+        source.mkdir()
+        (source / "package.json").write_text("{}", encoding="utf-8")
+        (source / ".git").write_text("ignored", encoding="utf-8")
+
+        copied = vsvc.prepare_viewer_runtime(source, runtime)
+
+        self.assertEqual(runtime, copied)
+        self.assertTrue((runtime / "package.json").is_file())
+        self.assertFalse((runtime / ".git").exists())
+        self.assertTrue((source / "package.json").is_file())
+
+    def test_prepare_viewer_runtime_rejects_paths_inside_source(self):
+        source = Path(self.tmp.name) / "source"
+        source.mkdir()
+        (source / "package.json").write_text("{}", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            vsvc.prepare_viewer_runtime(source, source / "runtime")
 
     @patch.object(vsvc, "_port_in_use", return_value=True)
     def test_stop_does_not_kill_viewer_with_wrong_root(self, _port):

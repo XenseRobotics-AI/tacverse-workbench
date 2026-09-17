@@ -1,12 +1,14 @@
 import os
 import sys
+import tempfile
 import unittest
 import datetime as dt
+from pathlib import Path
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication
 
 import main_app
@@ -101,6 +103,331 @@ class MainWindowUiTests(unittest.TestCase):
         self.assertIn("拉取完成: 1/1 个数据集", win.status.text())
         self.assertFalse(win.btn_pull.isEnabled())
         win._set_busy(False)
+
+    def test_download_finished_clears_ui_when_done_signal_is_lost(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        worker.local_dir = str(Path(main_app.OUT_DIR) / "test-dataset")
+        win._download_workers = [worker]
+        win._download_started = 1
+        win._download_completed = 0
+        win._download_successes = []
+        win._download_failures = []
+        win.speed_label.setText("12.5 MB/s")
+        win.speed_timer.start()
+        win.bar.setMaximum(0)
+        win.status.setText("开始下载 TacVerse/test-dataset ...")
+        win._set_busy(True)
+
+        with patch.object(win, "sender", return_value=worker), \
+                patch.object(main_app.QTimer, "singleShot") as single_shot:
+            win._on_download_worker_finished()
+
+        self.assertEqual("—", win.speed_label.text())
+        self.assertEqual(1, win.bar.maximum())
+        self.assertEqual(1, win.bar.value())
+        self.assertTrue(win.btn_download.isEnabled())
+        self.assertIn("下载/同步完成", win.status.text())
+        self.assertIn(worker, win._retired_download_workers)
+        single_shot.assert_called_once()
+        self.assertEqual(
+            main_app.DOWNLOAD_WORKER_RELEASE_DELAY_MS,
+            single_shot.call_args.args[0],
+        )
+        if win._download_message_box is not None:
+            win._download_message_box.close()
+
+    def test_download_done_refresh_failure_is_reported_not_raised(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        win._download_workers = [worker]
+        win._download_started = 1
+        win._download_completed = 0
+
+        with patch.object(win, "sender", return_value=worker), \
+                patch.object(win, "_refresh_table",
+                             side_effect=RuntimeError("render failed")), \
+                patch.object(main_app.traceback, "print_exception"), \
+                patch.object(main_app.QMessageBox, "critical") as critical:
+            win._on_download_one_done(str(Path(main_app.OUT_DIR) / "test-dataset"))
+
+        critical.assert_called_once()
+        self.assertIn("下载完成后刷新表格失败", win.status.text())
+        worker.deleteLater()
+        win._download_workers = []
+
+    def test_download_done_after_worker_release_is_safe(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        worker.deleteLater()
+        QApplication.processEvents()
+
+        with patch.object(win, "_refresh_table"):
+            win._on_download_one_done(
+                str(Path(main_app.OUT_DIR) / "test-dataset"))
+
+        self.assertEqual([], win._download_workers)
+
+    def test_releasing_deleted_download_worker_is_safe(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        worker = main_app.DownloadOneWorker(
+            "TacVerse/test-dataset", str(Path(main_app.OUT_DIR).parent), None)
+        win._retired_download_workers = [worker]
+        worker.deleteLater()
+        QApplication.processEvents()
+
+        win._release_download_worker(worker)
+
+        self.assertEqual([], win._retired_download_workers)
+
+    def test_stats_done_refresh_failure_is_reported_not_raised(self):
+        report = {
+            "date": "260101",
+            "org": "TacVerse",
+            "count": 1,
+            "requested": 1,
+            "total_hours": 0.1,
+            "datasets": [],
+        }
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        with patch.object(main_app.dd, "append_pull"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(win, "_refresh_all",
+                             side_effect=RuntimeError("render failed")), \
+                patch.object(main_app.traceback, "print_exception"), \
+                patch.object(main_app.QMessageBox, "critical") as critical:
+            win._on_stats_done(report)
+
+        critical.assert_called_once()
+        self.assertIn("统计完成后刷新界面失败", win.status.text())
+
+    def test_speed_tick_failure_pauses_timer_not_process(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        win._watch_dir = Path(main_app.OUT_DIR)
+        win.speed_timer.start()
+        with patch.object(main_app, "dir_size",
+                          side_effect=RuntimeError("directory disappeared")):
+            win._tick_speed()
+
+        self.assertFalse(win.speed_timer.isActive())
+        self.assertIn("测速暂停", win.status.text())
+
+    def test_guarded_slot_reports_exception_without_raising(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        def fail():
+            raise RuntimeError("boom")
+
+        with patch.object(main_app.traceback, "print_exception"), \
+                patch.object(main_app.QMessageBox, "critical") as critical:
+            win._guarded("测试动作", fail)()
+
+        critical.assert_called_once()
+        self.assertIn("测试动作失败: boom", win.status.text())
+
+    def test_startup_snapshot_render_failure_does_not_abort_window(self):
+        report = {
+            "date": "260101",
+            "org": "TacVerse",
+            "datasets": [{"dataset_name": "TacVerse/bad"}],
+        }
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[report]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"), \
+                patch.object(main_app.MainWindow, "_refresh_all",
+                             side_effect=RuntimeError("render failed")), \
+                patch.object(main_app.traceback, "print_exception"), \
+                patch.object(main_app.QMessageBox, "critical") as critical:
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        critical.assert_called_once()
+        self.assertIsNone(win.report)
+
+    def test_stats_and_download_actions_can_run_concurrently(self):
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+
+        win._stats_worker = object()
+        win._download_workers = []
+        win._refresh_action_states()
+        self.assertFalse(win.btn_stats.isEnabled())
+        self.assertTrue(win.btn_download.isEnabled())
+        self.assertFalse(win.btn_pull.isEnabled())
+
+        win._stats_worker = None
+        win._download_workers = [object()]
+        win._refresh_action_states()
+        self.assertTrue(win.btn_stats.isEnabled())
+        self.assertTrue(win.btn_download.isEnabled())
+        self.assertFalse(win.btn_pull.isEnabled())
+        win._stats_worker = None
+        win._download_workers = []
+
+    def test_download_selected_starts_multiple_parallel_workers(self):
+        report = {
+            "date": "260101",
+            "org": "TacVerse",
+            "datasets": [
+                {
+                    "dataset_name": "TacVerse/test-a",
+                    "total_episodes": 1,
+                    "total_frames": 1,
+                    "duration_hours": 0.1,
+                },
+                {
+                    "dataset_name": "TacVerse/test-b",
+                    "total_episodes": 1,
+                    "total_frames": 1,
+                    "duration_hours": 0.1,
+                },
+            ],
+        }
+        with patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                patch.object(main_app.dd, "load_history", return_value=[]), \
+                patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                patch.object(main_app.MainWindow, "_refresh_identity"):
+            win = main_app.MainWindow()
+        self.addCleanup(win.close)
+        win.report = report
+        win._refresh_table()
+
+        selection = win.table.fixed.selectionModel()
+        selection.clearSelection()
+        for row in (0, 1):
+            index = win.table.fixed.model().index(row, 0)
+            selection.select(
+                index, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+        win.table._sync_selection(win.table.fixed)
+        self.assertEqual([0, 1], win.table.selectedRows())
+
+        with patch.object(main_app.DownloadOneWorker, "start"):
+            win.on_download_selected()
+
+        self.assertEqual(2, len(win._download_workers))
+        self.assertEqual(
+            {"TacVerse/test-a", "TacVerse/test-b"},
+            {w.repo_id for w in win._download_workers})
+        for w in win._download_workers:
+            w.deleteLater()
+        win._download_workers = []
+
+    def test_download_selected_syncs_already_downloaded_rows(self):
+        report = {
+            "date": "260101",
+            "org": "TacVerse",
+            "datasets": [
+                {
+                    "dataset_name": "TacVerse/test-a",
+                    "total_episodes": 1,
+                    "total_frames": 1,
+                    "duration_hours": 0.1,
+                    "last_modified": "2026-01-02T00:00:00+00:00",
+                },
+                {
+                    "dataset_name": "TacVerse/test-b",
+                    "total_episodes": 1,
+                    "total_frames": 1,
+                    "duration_hours": 0.1,
+                    "last_modified": "2026-01-01T00:00:00+00:00",
+                },
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp) / "datasets" / "TacVerse"
+            local_a = out_dir / "legacy-day" / "test-a" / "meta"
+            local_a.mkdir(parents=True)
+            (local_a / "info.json").write_text("{}", encoding="utf-8")
+            with patch.object(main_app, "OUT_DIR", str(out_dir)), \
+                    patch.object(main_app.dd, "migrate_pull_history_to_log"), \
+                    patch.object(main_app.dd, "load_history", return_value=[]), \
+                    patch.object(main_app.dd, "load_hf_change_history", return_value={}), \
+                    patch.object(main_app.MainWindow, "_refresh_identity"):
+                win = main_app.MainWindow()
+                self.addCleanup(win.close)
+                win.report = report
+                win._refresh_table()
+
+                rows_by_name = {}
+                for row in range(win.table.rowCount()):
+                    item = win.table.item(row, 0)
+                    data = item.data(Qt.UserRole) if item else {}
+                    rows_by_name[data.get("dataset_name")] = row
+                self.assertEqual(
+                    "✅ 已下载",
+                    win.table.item(rows_by_name["TacVerse/test-a"], main_app.LOCAL_COL).text(),
+                )
+
+                selection = win.table.fixed.selectionModel()
+                selection.clearSelection()
+                for row in rows_by_name.values():
+                    index = win.table.fixed.model().index(row, 0)
+                    selection.select(
+                        index, QItemSelectionModel.Select | QItemSelectionModel.Rows)
+                win.table._sync_selection(win.table.fixed)
+
+                with patch.object(main_app.DownloadOneWorker, "start") as start:
+                    win.on_download_selected()
+
+                self.assertEqual(2, start.call_count)
+                self.assertEqual(
+                    {"TacVerse/test-a", "TacVerse/test-b"},
+                    {worker.repo_id for worker in win._download_workers},
+                )
+                self.assertIn("开始下载/同步 2 个数据集", win.status.text())
+                for w in win._download_workers:
+                    w.deleteLater()
+                win._download_workers = []
 
     def test_trend_axis_labels_are_adaptive(self):
         report = {

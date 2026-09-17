@@ -1,14 +1,14 @@
 """Manage the vendored xense_lerobot_viewer as a black-box web service.
 
-workbench talks to the viewer ONLY through its three stable contracts, so the
-viewer's source is never modified and stays upgradable from upstream:
+Workbench talks to the viewer ONLY through its three stable contracts, so the
+submodule stays read-only and only acts as a source reference:
 
   ① LOCAL_DATASET_ROOT env  → the shared dataset root the viewer scans
   ② HTTP on PORT            → home `/` and `/_local/<encodedPath>` deep links
   ③ side-effect files       → meta/xense_tags.json, meta/lerobot_annotations.json
 
-This module owns the viewer subprocess lifecycle (start / health / stop) and
-builds deep-link URLs. It is Qt-free so it can be unit-tested and reused.
+This module owns the viewer runtime copy, subprocess lifecycle (start / health /
+stop) and deep-link URLs. It is Qt-free so it can be unit-tested and reused.
 """
 
 import base64
@@ -26,8 +26,18 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
-VIEWER_DIR = Path(__file__).resolve().parent / "third_party" / "lerobot_viewer"
+ROOT = Path(__file__).resolve().parent
+VIEWER_SOURCE_DIR = ROOT / "third_party" / "lerobot_viewer"
+VIEWER_RUNTIME_DIR = ROOT / "vendor" / "lerobot_viewer_runtime"
 DEFAULT_PORT = 3000
+
+
+def _path_within(path, parent):
+    try:
+        Path(path).resolve().relative_to(Path(parent).resolve())
+        return True
+    except ValueError:
+        return False
 
 
 def encode_dataset_path(rel_path: str) -> str:
@@ -50,6 +60,79 @@ def find_bun():
     candidates = [bin_dir / "bun.exe", bin_dir / "bun"] if os.name == "nt" \
         else [bin_dir / "bun"]
     return next((str(path) for path in candidates if path.is_file()), None)
+
+
+def find_js_runner():
+    """Return a package runner for the viewer, preferring Bun when installed."""
+    bun = find_bun()
+    if bun:
+        return [bun, "run", "dev"], "bun"
+    npm = shutil.which("npm")
+    node_major, _ = node_version()
+    if npm and node_major is not None and node_major >= 20:
+        return [npm, "run", "dev"], "npm"
+    return None, None
+
+
+def node_version():
+    node = shutil.which("node")
+    if not node:
+        return None, None
+    try:
+        out = subprocess.check_output(
+            [node, "--version"], text=True, timeout=3).strip()
+    except Exception:
+        return None, None
+    version = out.lstrip("v")
+    major = version.split(".", 1)[0]
+    return (int(major), version) if major.isdigit() else (None, version)
+
+
+def install_hint(viewer_dir):
+    viewer_dir = Path(viewer_dir)
+    if _path_within(viewer_dir, VIEWER_SOURCE_DIR):
+        return (
+            "请执行 python scripts/install_viewer.py 使用 "
+            f"{VIEWER_RUNTIME_DIR}；submodule 仅保留为源码引用。")
+    if not (viewer_dir / "package.json").is_file():
+        return (
+            "请先执行 python scripts/install_viewer.py "
+            "生成运行时 viewer；submodule 仅保留为源码引用。")
+    if find_bun():
+        return f"请在 {viewer_dir} 执行 bun install"
+    node_major, node_text = node_version()
+    if shutil.which("npm") and node_major is not None and node_major >= 20:
+        return f"请在 {viewer_dir} 执行 npm install --no-package-lock"
+    if shutil.which("npm") and node_text:
+        return (
+            f"当前 Node.js {node_text} 过旧；请安装 Bun，或升级 Node.js >=20 "
+            f"后在 {viewer_dir} 执行 npm install --no-package-lock")
+    return "请先安装 Bun，或安装 Node.js >=20/npm 后再安装 viewer 依赖"
+
+
+def prepare_viewer_runtime(source_dir=VIEWER_SOURCE_DIR,
+                           runtime_dir=VIEWER_RUNTIME_DIR):
+    """Materialize a writable viewer runtime copy from the read-only submodule."""
+    source_dir = Path(source_dir)
+    runtime_dir = Path(runtime_dir)
+    if _path_within(runtime_dir, source_dir):
+        raise ValueError(
+            "viewer runtime directory must be outside the viewer submodule")
+    if not (source_dir / "package.json").is_file():
+        raise FileNotFoundError(
+            f"viewer source not found: {source_dir} "
+            "(run git submodule update --init --recursive)")
+    if runtime_dir.exists():
+        shutil.rmtree(runtime_dir)
+    runtime_dir.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(
+        source_dir, runtime_dir,
+        ignore=shutil.ignore_patterns(
+            ".git", ".gitmodules", "node_modules", ".next", "out", "dist",
+            "*.log", "*.tsbuildinfo",
+        ),
+    )
+    return runtime_dir
 
 
 def _port_in_use(port, host="127.0.0.1"):
@@ -268,10 +351,12 @@ def _windows_process_table():
 
 
 class ViewerService:
-    """Supervises one `bun run dev` viewer process bound to a dataset root."""
+    """Supervises one viewer dev server process bound to a dataset root."""
 
-    def __init__(self, viewer_dir=VIEWER_DIR, port=DEFAULT_PORT):
+    def __init__(self, viewer_dir=VIEWER_RUNTIME_DIR, source_dir=VIEWER_SOURCE_DIR,
+                 port=DEFAULT_PORT):
         self.viewer_dir = Path(viewer_dir)
+        self.source_dir = Path(source_dir)
         self.port = int(port)
         self.root = None
         self.proc = None
@@ -327,8 +412,11 @@ class ViewerService:
 
     # --- lifecycle (contract ①②) -----------------------------------------
     def available(self):
-        """viewer directory + installed deps present?"""
-        return (self.viewer_dir / "package.json").is_file() and \
+        """viewer directory, installed deps, and a usable JS runner present?"""
+        if _path_within(self.viewer_dir, self.source_dir):
+            return False
+        cmd, _ = find_js_runner()
+        return bool(cmd) and (self.viewer_dir / "package.json").is_file() and \
                (self.viewer_dir / "node_modules").is_dir()
 
     def _invalidate_info(self):
@@ -507,11 +595,11 @@ class ViewerService:
                 self._last_error = f"无法关闭旧 Viewer（数据根: {old_root}）"
                 return False, self._last_error
         if not self.available():
-            self._last_error = f"Viewer 未就绪（缺 node_modules）: {self.viewer_dir}"
+            self._last_error = f"Viewer 未就绪：{install_hint(self.viewer_dir)}"
             return False, self._last_error
-        bun = find_bun()
-        if not bun:
-            self._last_error = "未找到 Bun，请先安装 Bun"
+        cmd, runner = find_js_runner()
+        if not cmd:
+            self._last_error = "未找到 Bun 或 npm，无法启动 Viewer"
             return False, self._last_error
 
         env = dict(os.environ)
@@ -526,7 +614,7 @@ class ViewerService:
             creationflags |= getattr(subprocess, "CREATE_NO_WINDOW", 0)
         try:
             self.proc = subprocess.Popen(
-                [bun, "run", "dev"],
+                cmd,
                 cwd=str(self.viewer_dir),
                 env=env,
                 stdout=out,
@@ -545,7 +633,7 @@ class ViewerService:
         self._write_state()
 
         if not wait:
-            return True, "启动中…"
+            return True, f"启动中…（{runner}）"
         return self._wait_until_ready(timeout)
 
     def _wait_until_ready(self, timeout):
@@ -614,8 +702,14 @@ class ViewerService:
                     return json.loads(resp.read().decode("utf-8"))
             data = _retry_transient_http(read_report)
         except Exception as exc:
+            fallback = self._local_report_fallback(rel_path)
+            if fallback is not None:
+                return fallback, None
             return None, str(exc)
         if isinstance(data, dict) and data.get("ok") is False:
+            fallback = self._local_report_fallback(rel_path)
+            if fallback is not None:
+                return fallback, None
             return None, str(data.get("error") or "analysis failed")
         return data, None
 
@@ -675,6 +769,92 @@ class ViewerService:
         if result is None:
             return None, "Doctor stream ended without a result"
         return result, None
+
+    def _local_report_fallback(self, rel_path):
+        """Build the minimal report shape the Qt panel expects from metadata.
+
+        The vendored viewer may not expose a `/report` route in every upstream
+        revision. Keep Workbench usable by falling back to local LeRobot metadata
+        without modifying the viewer submodule.
+        """
+        if not self.root or not rel_path:
+            return None
+        root = Path(self.root).resolve()
+        ds_dir = (root / rel_path).resolve()
+        try:
+            ds_dir.relative_to(root)
+        except ValueError:
+            return None
+        info_path = ds_dir / "meta" / "info.json"
+        if not info_path.is_file():
+            return None
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+        features = info.get("features") or {}
+        cameras = [
+            key for key, val in features.items()
+            if (val or {}).get("dtype") == "video"
+            or "image" in key
+            or "camera" in key
+        ]
+        fps = info.get("fps") or 0
+        total_episodes = info.get("total_episodes") or 0
+        total_frames = info.get("total_frames") or 0
+        mean_len = None
+        if fps and total_episodes and total_frames:
+            mean_len = round(total_frames / fps / total_episodes, 2)
+
+        issues = []
+        if not total_episodes:
+            issues.append("meta/info.json 缺少 total_episodes")
+        if not total_frames:
+            issues.append("meta/info.json 缺少 total_frames")
+        if not fps:
+            issues.append("meta/info.json 缺少 fps")
+        if not (ds_dir / "meta" / "stats.json").is_file():
+            issues.append("meta/stats.json 不存在，深度质量分析不可用")
+
+        quality = {
+            "jerkyEpisodes": [],
+            "lowMovementEpisodes": [],
+            "smoothness": {
+                "verdict": {"label": "N/A"},
+                "lines": ["当前 viewer 版本未提供 /report 接口，已使用本地元数据摘要。"],
+                "tip": "打开浏览器 Viewer 可查看该子模块内置的完整交互分析。",
+            },
+        }
+        if mean_len is not None:
+            quality["episodeLength"] = {
+                "shortest": mean_len,
+                "longest": mean_len,
+                "mean": mean_len,
+                "median": mean_len,
+                "std": 0,
+            }
+
+        return {
+            "ok": True,
+            "dataset": {
+                "name": rel_path,
+                "total_episodes": total_episodes or None,
+                "total_frames": total_frames or None,
+                "fps": fps or None,
+                "cameras": cameras,
+                "robot_type": info.get("robot_type"),
+            },
+            "integrity": {
+                "status": "warning" if issues else "ok",
+                "issues": issues,
+            },
+            "quality": quality,
+            "training": {},
+            "meta": {
+                "sampledEpisodes": total_episodes or None,
+            },
+        }
 
     def status(self):
         port_in_use = _port_in_use(self.port)

@@ -21,6 +21,7 @@ import os
 import sys
 import threading
 import time
+from urllib.parse import urlsplit
 from pathlib import Path
 
 # By default every dataset under this org is discovered and pulled. Override
@@ -28,6 +29,21 @@ from pathlib import Path
 ORG = "TacVerse"
 
 HF_DATASET_URL = "https://huggingface.co/datasets/{repo_id}"
+HF_OFFICIAL_ENDPOINT = "https://huggingface.co"
+
+# `HF_ENDPOINT` is useful when a local mirror is available, but a mirror can
+# also answer the metadata request while failing to serve the actual file.
+# Keep the configured endpoint first, then use the official Hub as a
+# transparent fallback so an interrupted or stale mirror cannot strand a
+# partially downloaded dataset.
+_HUB_METADATA_ERROR_NAMES = frozenset({
+    "FileMetadataError",
+    "LocalEntryNotFoundError",
+})
+_HUB_ENDPOINT_ERROR_MARKERS = (
+    "distant resource does not seem to be on huggingface.co",
+    "cannot find the requested files in the local cache",
+)
 
 # Fields copied verbatim from meta/info.json into each dataset's summary.
 # Extend this list to surface more of info.json (e.g. "fps", "total_tasks",
@@ -44,9 +60,16 @@ INFO_FIELDS = [
 # Assumed capture rate (frames per second) when a dataset's info.json omits fps.
 DEFAULT_FPS = 30
 
-# Serialize Workbench snapshot calls so a single pull and a batch pull cannot
-# target the same local dataset directory at the same time.
-_SNAPSHOT_LOCK = threading.RLock()
+# Serialize snapshot calls per target directory so different datasets can pull
+# concurrently while a single pull and a batch pull cannot write the same dir.
+_SNAPSHOT_LOCKS = {}
+_SNAPSHOT_LOCKS_GUARD = threading.Lock()
+
+
+def _snapshot_lock_for(local_dir):
+    key = os.path.normcase(os.path.abspath(os.fspath(local_dir)))
+    with _SNAPSHOT_LOCKS_GUARD:
+        return _SNAPSHOT_LOCKS.setdefault(key, threading.RLock())
 
 
 _TRANSIENT_NETWORK_MARKERS = (
@@ -103,6 +126,92 @@ def _is_transient_network_error(exc):
     return False
 
 
+def _is_hub_metadata_error(exc):
+    """Return whether the Hub could not resolve file metadata.
+
+    `LocalEntryNotFoundError` is often only the outer error.  The useful
+    diagnosis is commonly its wrapped `FileMetadataError`, so inspect the
+    complete exception chain just as the transient-network detector does.
+    """
+    return any(
+        current.__class__.__name__ in _HUB_METADATA_ERROR_NAMES
+        for current in _related_exceptions(exc)
+    )
+
+
+def _response_url(response):
+    """Return the final URL associated with an httpx/requests response."""
+    if response is None:
+        return ""
+    try:
+        return str(response.url)
+    except (AttributeError, RuntimeError):
+        return ""
+
+
+def _response_redirected(response):
+    """Return whether a response followed a redirect."""
+    history = getattr(response, "history", None) or ()
+    for item in history:
+        try:
+            status = int(getattr(item, "status_code", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if 300 <= status < 400:
+            return True
+    return False
+
+
+def _is_hub_endpoint_error(exc, endpoint=None):
+    """Return whether retrying another Hub endpoint is worthwhile.
+
+    A mirror that redirects to the official Hub can turn an authenticated
+    request into a 401, which huggingface_hub reports as
+    `RepositoryNotFoundError`.  The response history/final URL and the
+    non-official endpoint are important context here; a bare 401 from the
+    official Hub must still be treated as an authentication error.
+    """
+    if _is_hub_metadata_error(exc) or _is_transient_network_error(exc):
+        return True
+    non_official = (
+        endpoint
+        and _normalize_hf_endpoint(endpoint).lower()
+        != HF_OFFICIAL_ENDPOINT.lower()
+    )
+    endpoint_host = urlsplit(str(endpoint or "")).netloc.lower()
+    for current in _related_exceptions(exc):
+        response = getattr(current, "response", None)
+        status = getattr(response, "status_code", None)
+        if status is None:
+            status = getattr(current, "status_code", None)
+        try:
+            status = int(status) if status is not None else None
+        except (TypeError, ValueError):
+            status = None
+        # A redirect without Hub metadata and a temporary server failure are
+        # endpoint problems.  Auth/permission/not-found responses from the
+        # official endpoint are not.
+        if status is not None and (300 <= status < 400 or status >= 500):
+            return True
+        if non_official and status is not None and 400 <= status < 500:
+            response_url = _response_url(response)
+            response_host = urlsplit(response_url).netloc.lower()
+            if (
+                _response_redirected(response)
+                or (response_host and response_host != endpoint_host)
+                or current.__class__.__name__ in {
+                    "RepositoryNotFoundError",
+                    "EntryNotFoundError",
+                    "HfHubHTTPError",
+                }
+            ):
+                return True
+        text = str(current).lower()
+        if any(marker in text for marker in _HUB_ENDPOINT_ERROR_MARKERS):
+            return True
+    return False
+
+
 def _retry_transient(call, *, label="", log=None, attempts=3, delay=0.6):
     """Retry idempotent Hub reads when the peer drops a chunked response."""
     for attempt in range(1, attempts + 1):
@@ -117,12 +226,131 @@ def _retry_transient(call, *, label="", log=None, attempts=3, delay=0.6):
             time.sleep(delay * attempt)
 
 
+def _retry_hub_call(call, *, label="", log=None, attempts=3, delay=0.6):
+    """Retry transient reads and incomplete Hub metadata lookups."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return call()
+        except Exception as exc:
+            retryable = (
+                _is_transient_network_error(exc)
+                or _is_hub_metadata_error(exc)
+            )
+            if attempt >= attempts or not retryable:
+                raise
+            if log:
+                prefix = f"{label}: " if label else ""
+                if _is_transient_network_error(exc):
+                    reason = "网络读取中断"
+                else:
+                    reason = "Hub 文件元数据暂时不可用"
+                log(f"{prefix}{reason}，正在重试 {attempt}/{attempts - 1} ...")
+            time.sleep(delay * attempt)
+
+
+def _normalize_hf_endpoint(endpoint):
+    """Return a comparable, slash-free Hub endpoint."""
+    value = str(endpoint or "").strip().rstrip("/")
+    return value or HF_OFFICIAL_ENDPOINT
+
+
+def _hub_endpoint_candidates():
+    """Return the configured Hub endpoint followed by the official fallback."""
+    configured = _normalize_hf_endpoint(os.environ.get("HF_ENDPOINT"))
+    if configured.lower() == HF_OFFICIAL_ENDPOINT.lower():
+        return [HF_OFFICIAL_ENDPOINT]
+    return [configured, HF_OFFICIAL_ENDPOINT]
+
+
+def _hub_endpoint_argument(endpoint):
+    """Avoid changing legacy default call shapes when no endpoint is set."""
+    if (
+        not os.environ.get("HF_ENDPOINT", "").strip()
+        and endpoint.lower() == HF_OFFICIAL_ENDPOINT.lower()
+    ):
+        return None
+    return endpoint
+
+
+def _is_mirror_endpoint(endpoint):
+    return "hf-mirror.com" in str(endpoint or "").lower()
+
+
+def _configure_hub_endpoint(endpoint):
+    """Apply endpoint-specific options before importing Hub transfer code."""
+    if not _is_mirror_endpoint(endpoint):
+        return
+
+    # hf-mirror does not proxy Xet's CAS service.  Force plain HTTP for both
+    # fresh imports and a huggingface_hub package that was imported earlier.
+    os.environ["HF_HUB_DISABLE_XET"] = "1"
+    try:
+        import huggingface_hub.constants as hub_constants
+
+        hub_constants.HF_HUB_DISABLE_XET = True
+    except (ImportError, AttributeError):
+        pass
+
+
+def _call_hub_with_fallback(call, *, label="", log=None):
+    """Call a Hub operation and fall back to the official endpoint if needed.
+
+    `call` receives the endpoint argument expected by huggingface_hub.  When
+    no `HF_ENDPOINT` was configured, the official endpoint is passed as
+    `None` to preserve the library default and compatibility with older Hub
+    versions.
+    """
+    endpoints = _hub_endpoint_candidates()
+    for index, endpoint in enumerate(endpoints):
+        _configure_hub_endpoint(endpoint)
+        try:
+            return _retry_hub_call(
+                lambda: call(_hub_endpoint_argument(endpoint)),
+                label=label,
+                log=log,
+            )
+        except Exception as exc:
+            if (
+                index == len(endpoints) - 1
+                or not _is_hub_endpoint_error(exc, endpoint)
+            ):
+                raise
+            if log:
+                log(
+                    f"{label + ': ' if label else ''}{endpoint} "
+                    f"无法提供文件，切换到官方端点 {HF_OFFICIAL_ENDPOINT} ..."
+                )
+    raise AssertionError("unreachable")
+
+
+def fetch_username(token):
+    """Resolve the account name for ``token`` using the configured Hub.
+
+    The GUI uses this as a lightweight authentication check.  It deliberately
+    lives next to the other Hub reads so a mirror that redirects or rejects
+    ``whoami`` gets the same official-endpoint fallback as dataset metadata.
+    """
+    if not token:
+        return ""
+    from huggingface_hub import HfApi
+
+    result = _call_hub_with_fallback(
+        lambda endpoint: HfApi(
+            **({"endpoint": endpoint} if endpoint else {}),
+        ).whoami(token=token),
+        label="验证 Hugging Face 登录",
+    )
+    return result.get("name", "") or ""
+
+
 def normalize_proxy_env() -> None:
-    """Make the shell proxy vars parseable by httpx (huggingface_hub 1.x).
+    """Normalize proxy and Hub endpoint settings for huggingface_hub.
 
     httpx rejects a schemeless `socks://` proxy URL. The http(s)_proxy vars
     already cover HTTPS traffic to the Hub, so drop the offending ALL_PROXY
-    vars and normalize any remaining socks:// value to socks5://.
+    vars and normalize any remaining socks:// value to socks5://.  Preserve a
+    caller-provided HF_ENDPOINT, while endpoint-specific calls can still fall
+    back to the official Hub.
     """
     for var in ("ALL_PROXY", "all_proxy"):
         os.environ.pop(var, None)
@@ -130,6 +358,10 @@ def normalize_proxy_env() -> None:
         val = os.environ.get(var)
         if val and val.startswith("socks://"):
             os.environ[var] = "socks5://" + val[len("socks://"):]
+    endpoint = os.environ.get("HF_ENDPOINT")
+    if endpoint is not None:
+        os.environ["HF_ENDPOINT"] = _normalize_hf_endpoint(endpoint)
+    _configure_hub_endpoint(_normalize_hf_endpoint(endpoint))
 
 
 def _apply_info(summary: dict, info: dict) -> dict:
@@ -183,15 +415,16 @@ def fetch_tasks(repo_id: str, token=None) -> list:
     the stats-only path so the dashboard can show prompts without a full pull.
     Returns [{"index", "task"}] (sorted), or [] if absent/unreadable.
     """
-    from huggingface_hub import hf_hub_download
-
     try:
-        path = _retry_transient(
-            lambda: hf_hub_download(
+        from huggingface_hub import hf_hub_download
+
+        path = _call_hub_with_fallback(
+            lambda endpoint: hf_hub_download(
                 repo_id=repo_id,
                 filename="meta/tasks.parquet",
                 repo_type="dataset",
                 token=token,
+                **({"endpoint": endpoint} if endpoint else {}),
             ),
             label=f"读取 {repo_id} tasks",
         )
@@ -210,19 +443,20 @@ def fetch_summary(repo_id: str, token=None) -> dict:
     for the task prompt) instead of the whole (potentially huge) dataset. Falls
     back to name+link if info.json is absent.
     """
-    from huggingface_hub import hf_hub_download
-
     summary = {
         "dataset_name": repo_id,
         "link": HF_DATASET_URL.format(repo_id=repo_id),
     }
     try:
-        info_path = _retry_transient(
-            lambda: hf_hub_download(
+        from huggingface_hub import hf_hub_download
+
+        info_path = _call_hub_with_fallback(
+            lambda endpoint: hf_hub_download(
                 repo_id=repo_id,
                 filename="meta/info.json",
                 repo_type="dataset",
                 token=token,
+                **({"endpoint": endpoint} if endpoint else {}),
             ),
             label=f"读取 {repo_id} info",
         )
@@ -239,14 +473,22 @@ def discover_datasets_meta(org, token):
     Ordered most-recently-updated first, matching the Hugging Face org page's
     default "Recently updated" sort. Datasets missing a timestamp sort last.
     """
-    from huggingface_hub import list_datasets
-
     # Ask the Hub for its own "Recently updated" ranking when available; older
     # huggingface_hub versions (e.g. 1.23.x) do not expose a `direction` kwarg,
     # so we sort client-side as the source of truth and also pin timestamp-less
     # repos last.
-    ds = _retry_transient(
-        lambda: list(list_datasets(author=org, token=token, sort="lastModified")),
+    from huggingface_hub import HfApi
+
+    ds = _call_hub_with_fallback(
+        lambda endpoint: list(
+            HfApi(
+                **({"endpoint": endpoint} if endpoint else {}),
+            ).list_datasets(
+                author=org,
+                token=token,
+                sort="lastModified",
+            )
+        ),
         label=f"发现 {org} 数据集",
     )
     ds.sort(key=lambda d: (d.last_modified is not None, d.last_modified), reverse=True)
@@ -269,11 +511,13 @@ def fetch_uploader(repo_id, token=None):
     the dataset. `uploaders` lists every distinct commit author. Degrades to an
     empty dict on any error (private repo, network, etc.).
     """
-    from huggingface_hub import HfApi
-
     try:
-        commits = _retry_transient(
-            lambda: HfApi().list_repo_commits(
+        from huggingface_hub import HfApi
+
+        commits = _call_hub_with_fallback(
+            lambda endpoint: HfApi(
+                **({"endpoint": endpoint} if endpoint else {}),
+            ).list_repo_commits(
                 repo_id, repo_type="dataset", token=token),
             label=f"读取 {repo_id} commits",
         )
@@ -316,44 +560,143 @@ def _hub_local_dir(local_dir):
     return "\\\\?\\" + path
 
 
-def _snapshot_to_local(repo_id, revision, local_dir, token, *, max_workers):
+def _snapshot_to_local(
+        repo_id, revision, local_dir, token, *, max_workers, endpoint=None):
+    _configure_hub_endpoint(endpoint or _normalize_hf_endpoint(
+        os.environ.get("HF_ENDPOINT")))
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(
-        repo_id=repo_id,
-        repo_type="dataset",
-        revision=revision,
-        local_dir=_hub_local_dir(local_dir),
-        token=token,
-        max_workers=max_workers,
+    kwargs = {
+        "repo_id": repo_id,
+        "repo_type": "dataset",
+        "revision": revision,
+        "local_dir": _hub_local_dir(local_dir),
+        "token": token,
+        "max_workers": max_workers,
+    }
+    if endpoint:
+        kwargs["endpoint"] = endpoint
+    return snapshot_download(**kwargs)
+
+
+def _probe_snapshot_endpoint(repo_id, revision, token, endpoint, *, log=None):
+    """Resolve the remote repo before syncing an existing local directory.
+
+    ``snapshot_download`` deliberately returns a non-empty ``local_dir`` when
+    its initial Hub request fails. That offline convenience is unsafe for a
+    sync operation: a mirror may have redirected to the official Hub and
+    returned 401, while the caller is told that an old directory is current.
+    A small ``repo_info`` request makes the endpoint choice explicit before
+    that fallback can happen.
+    """
+    from huggingface_hub import HfApi
+
+    endpoint_arg = _hub_endpoint_argument(endpoint)
+    api_kwargs = {"token": token}
+    if endpoint_arg:
+        api_kwargs["endpoint"] = endpoint_arg
+    api = HfApi(**api_kwargs)
+
+    def resolve():
+        try:
+            return api.repo_info(
+                repo_id=repo_id,
+                repo_type="dataset",
+                revision=revision,
+                token=token,
+            )
+        except TypeError:
+            # Older huggingface_hub releases may not expose ``token`` on the
+            # method; the token supplied to HfApi still covers those versions.
+            return api.repo_info(
+                repo_id=repo_id,
+                repo_type="dataset",
+                revision=revision,
+            )
+
+    return _retry_hub_call(
+        resolve,
+        label=f"检查 {repo_id} 远端",
+        log=log,
     )
+
+
+def _snapshot_with_retries(
+        repo_id, revision, local_dir, token, *, endpoint, log):
+    """Run one endpoint's snapshot with worker and transfer retries."""
+    attempts = [8, 1, 1]
+    retry_note = None
+    endpoint_arg = _hub_endpoint_argument(endpoint)
+    for index, workers in enumerate(attempts):
+        if retry_note:
+            log(retry_note)
+            time.sleep(0.25)
+            retry_note = None
+        try:
+            kwargs = {
+                "max_workers": workers,
+            }
+            if endpoint_arg:
+                kwargs["endpoint"] = endpoint_arg
+            _snapshot_to_local(
+                repo_id, revision, local_dir, token, **kwargs,
+            )
+            return
+        except Exception as exc:
+            if _is_local_cache_temp_error(exc):
+                retry_note = "检测到缓存临时文件异常，正在单线程续传…"
+            elif _is_transient_network_error(exc):
+                retry_note = "网络读取中断，正在续传…"
+            elif _is_hub_metadata_error(exc):
+                retry_note = "Hub 文件元数据暂时不可用，正在重试…"
+            if not retry_note or index == len(attempts) - 1:
+                raise
+
+
+def _snapshot_to_local_with_fallback(
+        repo_id, revision, local_dir, token, *, log):
+    """Download a snapshot, switching to the official Hub when necessary."""
+    endpoints = _hub_endpoint_candidates()
+    for index, endpoint in enumerate(endpoints):
+        _configure_hub_endpoint(endpoint)
+        try:
+            # When local_dir is non-empty, snapshot_download can turn an
+            # endpoint/auth failure into a successful-looking return. Probe
+            # first so an old local copy never masks a failed remote sync.
+            local_path = Path(local_dir)
+            if local_path.is_dir() and any(local_path.iterdir()):
+                _probe_snapshot_endpoint(
+                    repo_id, revision, token, endpoint, log=log,
+                )
+            _snapshot_with_retries(
+                repo_id,
+                revision,
+                local_dir,
+                token,
+                endpoint=endpoint,
+                log=log,
+            )
+            return
+        except Exception as exc:
+            if (
+                index == len(endpoints) - 1
+                or not _is_hub_endpoint_error(exc, endpoint)
+            ):
+                raise
+            log(
+                f"{endpoint} 无法提供 {repo_id} 的文件，"
+                f"切换到官方端点 {HF_OFFICIAL_ENDPOINT} ..."
+            )
 
 
 def pull_dataset(repo_id, dataset_dir, revision, token, log=print):
     """Download one dataset into <dataset_dir>/<dataset-name> and summarize it."""
     local_dir = Path(dataset_dir) / repo_id.split("/")[-1]
     log(f"Downloading {repo_id} -> {local_dir}")
-    attempts = [8, 1, 1]
-    retry_note = None
-    with _SNAPSHOT_LOCK:
-        for index, workers in enumerate(attempts):
-            if retry_note:
-                log(retry_note)
-                time.sleep(0.25)
-                retry_note = None
-            try:
-                _snapshot_to_local(
-                    repo_id, revision, local_dir, token,
-                    max_workers=workers,
-                )
-                break
-            except Exception as exc:
-                if _is_local_cache_temp_error(exc):
-                    retry_note = "检测到缓存临时文件异常，正在单线程续传…"
-                elif _is_transient_network_error(exc):
-                    retry_note = "网络读取中断，正在续传…"
-                if not retry_note or index == len(attempts) - 1:
-                    raise
+    with _snapshot_lock_for(local_dir):
+        _snapshot_to_local_with_fallback(
+            repo_id, revision, local_dir, token, log=log,
+        )
     return build_summary(repo_id, str(local_dir))
 
 
@@ -1332,13 +1675,14 @@ def _summary_from_info(repo_id, info):
 def _fetch_info_at_revision(repo_id, revision, token=None):
     from huggingface_hub import hf_hub_download
 
-    path = _retry_transient(
-        lambda: hf_hub_download(
+    path = _call_hub_with_fallback(
+        lambda endpoint: hf_hub_download(
             repo_id=repo_id,
             filename="meta/info.json",
             repo_type="dataset",
             revision=revision,
             token=token,
+            **({"endpoint": endpoint} if endpoint else {}),
         ),
         label=f"读取 {repo_id}@{revision} info",
     )
@@ -1359,18 +1703,21 @@ def build_hf_change_rows(repo_id, dataset, token=None):
     """Build true HF data-growth rows from commit history and meta/info.json diffs."""
     from huggingface_hub import HfApi
 
-    api = HfApi()
-    try:
-        commits = _retry_transient(
-            lambda: api.list_repo_commits(
-                repo_id=repo_id, repo_type="dataset", token=token),
-            label=f"读取 {repo_id} commits",
-        )
-    except TypeError:
-        commits = _retry_transient(
-            lambda: api.list_repo_commits(repo_id=repo_id, repo_type="dataset"),
-            label=f"读取 {repo_id} commits",
-        )
+    def list_commits(endpoint):
+        api = HfApi(**({"endpoint": endpoint} if endpoint else {}))
+        try:
+            return api.list_repo_commits(
+                repo_id=repo_id, repo_type="dataset", token=token)
+        except TypeError:
+            # Keep compatibility with older huggingface_hub releases that did
+            # not expose `token` on this method.
+            return api.list_repo_commits(
+                repo_id=repo_id, repo_type="dataset")
+
+    commits = _call_hub_with_fallback(
+        list_commits,
+        label=f"读取 {repo_id} commits",
+    )
     commits = sorted(commits, key=lambda commit: _commit_created_at(commit) or "")
     prev = None
     rows = []

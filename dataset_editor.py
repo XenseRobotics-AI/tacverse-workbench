@@ -89,6 +89,10 @@ def copy_dataset(src_dir, dst_dir, *, hardlink_heavy=True):
         raise FileNotFoundError(f"源不是有效数据集（缺 meta/info.json）: {src_dir}")
     if dst_dir.exists():
         raise FileExistsError(f"目标已存在: {dst_dir}")
+    src_resolved = src_dir.resolve()
+    dst_resolved = dst_dir.resolve()
+    if dst_resolved == src_resolved or src_resolved in dst_resolved.parents:
+        raise ValueError(f"目标不能是源目录或其子目录: {dst_dir}")
 
     dst_dir.mkdir(parents=True)
     for child in sorted(src_dir.iterdir()):
