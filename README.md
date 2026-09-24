@@ -85,7 +85,7 @@ python3 -m pip install --upgrade pip
 python3 scripts/install_all.py
 ```
 
-`scripts/install_all.py` 会安装 `requirements-full.txt`，初始化 `third_party/lerobot_viewer` 子模块，并执行 `bun install`。使用 `py -3` / `python3` 的形式可以确保依赖安装到实际启动程序的解释器中。
+`scripts/install_all.py` 会安装 `requirements-full.txt`，初始化 `third_party/lerobot_viewer` 源码引用，并在 `vendor/lerobot_viewer_runtime` 生成运行时副本后执行 `bun install`。使用 `py -3` / `python3` 可确保依赖装到实际启动程序的解释器中。
 
 如果当前机器暂时不需要 LeRobot 数据集操作，可改用轻量安装：
 
@@ -118,22 +118,15 @@ sudo apt install -y libxcb-cursor0
 
 ### 4. 单独安装 Viewer
 
-**Viewer：** 需要仓库子模块、[Bun](https://bun.sh/) 和前端依赖。安装 Bun 后，在项目根目录执行：
+**Viewer：** 需要 Bun 和 viewer 运行时副本。安装 [Bun](https://bun.sh/) 后，在项目根目录执行：
 
 ```bash
 python scripts/install_viewer.py
 ```
 
-也可以手动执行：
+运行时副本位于 `vendor/lerobot_viewer_runtime/`，`third_party/lerobot_viewer/` 只保留为上游源码引用。
 
-```bash
-git submodule update --init --recursive
-cd third_party/lerobot_viewer
-bun install
-cd ../..
-```
-
-上述 `cd` 和 `bun` 命令在 Windows PowerShell、Ubuntu 与 macOS 中通用。Viewer 未安装时，其他页签仍可正常使用。
+上述命令在 Windows PowerShell、Ubuntu 与 macOS 中通用。Viewer 未安装时，其他页签仍可正常使用。
 
 ---
 
@@ -225,7 +218,7 @@ python3 main_app.py
 | 按钮 | 功能 |
 |---|---|
 | `刷新统计` | 只获取数据集元信息，不下载 Parquet 和视频 |
-| `下载选中` | 下载表格中当前选中的一个数据集 |
+| `下载选中` | 下载表格中当前选中的一个或多个数据集（Ctrl/Shift 多选，并行执行） |
 | `同步全部` | 下载当前组织下全部数据集并更新统计历史 |
 | `检查新增` | 对比 Hub 与本地统计记录中的数据集名称 |
 | `手动补录` | 补录指定日期的累计统计快照 |
@@ -296,7 +289,7 @@ Workbench 不显示直方图，而是直接提供可展开的时长分组：
 PASS 8   WARN 2   FAIL 1
 ```
 
-Doctor 由 `third_party/lerobot_viewer` 提供，Workbench 通过 viewer 的 HTTP 接口调用，不修改 viewer 源码。诊断包括元数据、时间一致性、动作质量、视频完整性、数据分布、Episode 健康度、特征一致性、训练准备度、异常检测、可移植性和逐 Episode 汇总等项目。全量诊断可能需要更多时间和内存，建议先使用前 25 或自定义范围。
+Doctor 由 viewer 运行时副本提供，Workbench 通过 HTTP 接口调用，不修改 viewer 源码；`third_party/lerobot_viewer` 只作为上游源码引用。诊断包括元数据、时间一致性、动作质量、视频完整性、数据分布、Episode 健康度、特征一致性、训练准备度、异常检测、可移植性和逐 Episode 汇总等项目。全量诊断可能需要更多时间和内存，建议先使用前 25 或自定义范围。
 
 ### 数据集编辑（生成新副本，不改动原数据）
 

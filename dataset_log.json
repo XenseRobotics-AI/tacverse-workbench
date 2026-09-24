@@ -296,7 +296,37 @@
     "TacVerse/taccap-g1-organize-meeting-table-items-0729",
     "TacVerse/taccap-g1-organize-folders-0729",
     "TacVerse/grasp-the-water-cup-and-twist-off-the-cup-lid-0729",
-    "TacVerse/taccap-g1-erase-whiteboard-text-0729"
+    "TacVerse/taccap-g1-erase-whiteboard-text-0729",
+    "TacVerse/taccap-g1-arrange-skincare-products-0814",
+    "TacVerse/taccap-g1-assemble-toy-blocks-0814",
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0814",
+    "TacVerse/taccap-g1-pump-hand-sanitizer-0814",
+    "TacVerse/taccap-g1-arrange-tabletop-items-0814",
+    "TacVerse/taccap-g1-operate-shoe-box-0814",
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0814",
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0814",
+    "TacVerse/taccap-g1-open-folded-towel-0813",
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0813",
+    "TacVerse/taccap-g1-arrange-dishes-in-rack-0813",
+    "TacVerse/taccap-g1-insert-shoelace-into-eyelets-0813",
+    "TacVerse/taccap-g1-arrange-tabletop-items-0813",
+    "TacVerse/taccap-g1-fold-garment-0813",
+    "TacVerse/taccap-g1-assemble-toy-blocks-0813",
+    "TacVerse/taccap-g1-operate-shoe-box-0813",
+    "TacVerse/taccap-g1-arrange-skincare-products-0813",
+    "TacVerse/taccap-g1-open-folded-towel-0812",
+    "TacVerse/taccap-g1-insert-shoelace-into-eyelets-0812",
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0812",
+    "TacVerse/taccap-g1-arrange-dishes-in-rack-0812",
+    "TacVerse/taccap-g1-fold-garment-0812",
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0816",
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0816",
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0816",
+    "TacVerse/taccap-g1-place-food-with-tongs-0816",
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0815",
+    "TacVerse/taccap-g1-place-food-with-tongs-0815",
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0815",
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0815"
   ],
   "daily_totals": [
     {
@@ -538,6 +568,69 @@
         258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273,
         274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
         290, 291, 292, 293, 294, 295, 296
+      ]
+    },
+    {
+      "pulled_at": "2026-08-15T10:58:47",
+      "date": "260815",
+      "org": "TacVerse",
+      "total_datasets": 317,
+      "total_episodes": 28175,
+      "total_frames": 86970913,
+      "total_hours": 805.284,
+      "present": [
+        0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+        65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+        81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112,
+        113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+        129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
+        145, 146, 147, 148, 149, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
+        162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+        178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193,
+        194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+        210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
+        226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241,
+        242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257,
+        258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273,
+        274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
+        290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305,
+        306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318
+      ]
+    },
+    {
+      "pulled_at": "2026-08-16T21:25:30",
+      "date": "260816",
+      "org": "TacVerse",
+      "total_datasets": 325,
+      "total_episodes": 29554,
+      "total_frames": 91780199,
+      "total_hours": 849.815,
+      "present": [
+        0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48,
+        49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64,
+        65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80,
+        81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+        97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112,
+        113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128,
+        129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
+        145, 146, 147, 148, 149, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161,
+        162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177,
+        178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193,
+        194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+        210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
+        226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240, 241,
+        242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255, 256, 257,
+        258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273,
+        274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289,
+        290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305,
+        306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321,
+        322, 323, 324, 325, 326
       ]
     }
   ],
@@ -1330,20 +1423,24 @@
       "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "QiuDekang", "last_modified": "2026-07-24T09:24:36+00:00"},
     "TacVerse/taccap-g1-operate-shoe-box-0812": {
       "changes": [
-        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 36, "total_frames": 204228, "duration_hours": 1.891, "d_episodes": 36, "d_frames": 204228, "d_hours": 1.891}],
-      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-12T04:07:54+00:00"},
+        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 36, "total_frames": 204228, "duration_hours": 1.891, "d_episodes": 36, "d_frames": 204228, "d_hours": 1.891},
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 100, "total_frames": 548193, "duration_hours": 5.076, "d_episodes": 64, "d_frames": 343965, "d_hours": 3.185}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-12T13:27:52+00:00"},
     "TacVerse/taccap-g1-arrange-skincare-products-0812": {
       "changes": [
-        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 78, "total_frames": 219889, "duration_hours": 2.036, "d_episodes": 78, "d_frames": 219889, "d_hours": 2.036}],
-      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-12T04:06:36+00:00"},
+        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 78, "total_frames": 219889, "duration_hours": 2.036, "d_episodes": 78, "d_frames": 219889, "d_hours": 2.036},
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 189, "total_frames": 551926, "duration_hours": 5.11, "d_episodes": 111, "d_frames": 332037, "d_hours": 3.074}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-12T09:54:20+00:00"},
     "TacVerse/taccap-g1-assemble-toy-blocks-0812": {
       "changes": [
-        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 50, "total_frames": 162258, "duration_hours": 1.502, "d_episodes": 50, "d_frames": 162258, "d_hours": 1.502}],
-      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-12T04:06:02+00:00"},
+        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 50, "total_frames": 162258, "duration_hours": 1.502, "d_episodes": 50, "d_frames": 162258, "d_hours": 1.502},
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 149, "total_frames": 490445, "duration_hours": 4.541, "d_episodes": 99, "d_frames": 328187, "d_hours": 3.039}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-12T09:59:08+00:00"},
     "TacVerse/taccap-g1-arrange-tabletop-items-0812": {
       "changes": [
-        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": null, "total_frames": null, "duration_hours": null, "d_episodes": 0, "d_frames": 0, "d_hours": 0}],
-      "fps": null, "robot_type": null, "total_tasks": null, "uploader": "XR-Bot0", "last_modified": "2026-08-12T03:59:22+00:00"},
+        {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": null, "total_frames": null, "duration_hours": null, "d_episodes": 0, "d_frames": 0, "d_hours": 0},
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 177, "total_frames": 598135, "duration_hours": 5.538, "d_episodes": 177, "d_frames": 598135, "d_hours": 5.538}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-12T10:07:35+00:00"},
     "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0711": {
       "changes": [
         {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 43, "total_frames": 513011, "duration_hours": 4.75, "d_episodes": 43, "d_frames": 513011, "d_hours": 4.75}],
@@ -1727,6 +1824,126 @@
     "TacVerse/taccap-g1-erase-whiteboard-text-0729": {
       "changes": [
         {"date": "260812", "pulled_at": "2026-08-12T15:08:28", "total_episodes": 26, "total_frames": 234171, "duration_hours": 2.168, "d_episodes": 26, "d_frames": 234171, "d_hours": 2.168}],
-      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "WBH333", "last_modified": "2026-07-29T09:32:07+00:00"}
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "WBH333", "last_modified": "2026-07-29T09:32:07+00:00"},
+    "TacVerse/taccap-g1-arrange-skincare-products-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 125, "total_frames": 501183, "duration_hours": 4.641, "d_episodes": 125, "d_frames": 501183, "d_hours": 4.641}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-14T14:01:37+00:00"},
+    "TacVerse/taccap-g1-assemble-toy-blocks-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 121, "total_frames": 563144, "duration_hours": 5.214, "d_episodes": 121, "d_frames": 563144, "d_hours": 5.214}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-14T10:31:57+00:00"},
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 129, "total_frames": 595196, "duration_hours": 5.511, "d_episodes": 129, "d_frames": 595196, "d_hours": 5.511}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-14T10:22:32+00:00"},
+    "TacVerse/taccap-g1-pump-hand-sanitizer-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 556, "total_frames": 549147, "duration_hours": 5.085, "d_episodes": 556, "d_frames": 549147, "d_hours": 5.085}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-14T10:12:45+00:00"},
+    "TacVerse/taccap-g1-arrange-tabletop-items-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 224, "total_frames": 566711, "duration_hours": 5.247, "d_episodes": 224, "d_frames": 566711, "d_hours": 5.247}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-14T10:09:01+00:00"},
+    "TacVerse/taccap-g1-operate-shoe-box-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 101, "total_frames": 557822, "duration_hours": 5.165, "d_episodes": 101, "d_frames": 557822, "d_hours": 5.165}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-14T09:58:49+00:00"},
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 63, "total_frames": 493083, "duration_hours": 4.566, "d_episodes": 63, "d_frames": 493083, "d_hours": 4.566}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-14T09:57:12+00:00"},
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0814": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 136, "total_frames": 553816, "duration_hours": 5.128, "d_episodes": 136, "d_frames": 553816, "d_hours": 5.128}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-14T09:49:55+00:00"},
+    "TacVerse/taccap-g1-open-folded-towel-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 279, "total_frames": 718591, "duration_hours": 6.654, "d_episodes": 279, "d_frames": 718591, "d_hours": 6.654}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-13T13:02:45+00:00"},
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 120, "total_frames": 756800, "duration_hours": 7.007, "d_episodes": 120, "d_frames": 756800, "d_hours": 7.007}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-13T12:32:41+00:00"},
+    "TacVerse/taccap-g1-arrange-dishes-in-rack-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 28, "total_frames": 490082, "duration_hours": 4.538, "d_episodes": 28, "d_frames": 490082, "d_hours": 4.538}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-13T10:15:14+00:00"},
+    "TacVerse/taccap-g1-insert-shoelace-into-eyelets-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 52, "total_frames": 668846, "duration_hours": 6.193, "d_episodes": 52, "d_frames": 668846, "d_hours": 6.193}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-13T10:09:09+00:00"},
+    "TacVerse/taccap-g1-arrange-tabletop-items-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 233, "total_frames": 653211, "duration_hours": 6.048, "d_episodes": 233, "d_frames": 653211, "d_hours": 6.048}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-13T10:07:43+00:00"},
+    "TacVerse/taccap-g1-fold-garment-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 154, "total_frames": 542361, "duration_hours": 5.022, "d_episodes": 154, "d_frames": 542361, "d_hours": 5.022}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-13T10:05:20+00:00"},
+    "TacVerse/taccap-g1-assemble-toy-blocks-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 142, "total_frames": 532104, "duration_hours": 4.927, "d_episodes": 142, "d_frames": 532104, "d_hours": 4.927}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-13T09:56:04+00:00"},
+    "TacVerse/taccap-g1-operate-shoe-box-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 84, "total_frames": 565715, "duration_hours": 5.238, "d_episodes": 84, "d_frames": 565715, "d_hours": 5.238}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot0", "last_modified": "2026-08-13T09:54:56+00:00"},
+    "TacVerse/taccap-g1-arrange-skincare-products-0813": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 160, "total_frames": 557286, "duration_hours": 5.16, "d_episodes": 160, "d_frames": 557286, "d_hours": 5.16}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot1", "last_modified": "2026-08-13T09:53:02+00:00"},
+    "TacVerse/taccap-g1-open-folded-towel-0812": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 101, "total_frames": 447940, "duration_hours": 4.148, "d_episodes": 101, "d_frames": 447940, "d_hours": 4.148}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-12T10:35:57+00:00"},
+    "TacVerse/taccap-g1-insert-shoelace-into-eyelets-0812": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 43, "total_frames": 649994, "duration_hours": 6.018, "d_episodes": 43, "d_frames": 649994, "d_hours": 6.018}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-12T10:26:42+00:00"},
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0812": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 132, "total_frames": 698674, "duration_hours": 6.469, "d_episodes": 132, "d_frames": 698674, "d_hours": 6.469}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-12T10:25:52+00:00"},
+    "TacVerse/taccap-g1-arrange-dishes-in-rack-0812": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 34, "total_frames": 492358, "duration_hours": 4.559, "d_episodes": 34, "d_frames": 492358, "d_hours": 4.559}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-12T10:22:23+00:00"},
+    "TacVerse/taccap-g1-fold-garment-0812": {
+      "changes": [
+        {"date": "260815", "pulled_at": "2026-08-15T10:58:47", "total_episodes": 179, "total_frames": 550502, "duration_hours": 5.097, "d_episodes": 179, "d_frames": 550502, "d_hours": 5.097}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-12T10:11:55+00:00"},
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0816": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 176, "total_frames": 664434, "duration_hours": 6.152, "d_episodes": 176, "d_frames": 664434, "d_hours": 6.152}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-16T10:16:29+00:00"},
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0816": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 161, "total_frames": 558408, "duration_hours": 5.17, "d_episodes": 161, "d_frames": 558408, "d_hours": 5.17}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-16T10:14:08+00:00"},
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0816": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 277, "total_frames": 602829, "duration_hours": 5.582, "d_episodes": 277, "d_frames": 602829, "d_hours": 5.582}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-16T10:10:12+00:00"},
+    "TacVerse/taccap-g1-place-food-with-tongs-0816": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 126, "total_frames": 573655, "duration_hours": 5.312, "d_episodes": 126, "d_frames": 573655, "d_hours": 5.312}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-16T10:05:08+00:00"},
+    "TacVerse/taccap-g1-arrange-cutlery-in-storage-slots-0815": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 156, "total_frames": 583389, "duration_hours": 5.402, "d_episodes": 156, "d_frames": 583389, "d_hours": 5.402}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-15T10:14:52+00:00"},
+    "TacVerse/taccap-g1-place-food-with-tongs-0815": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 125, "total_frames": 533598, "duration_hours": 4.941, "d_episodes": 125, "d_frames": 533598, "d_hours": 4.941}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot4", "last_modified": "2026-08-15T10:11:42+00:00"},
+    "TacVerse/taccap-g1-rotate-seasoning-bottle-to-target-0815": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 241, "total_frames": 654160, "duration_hours": 6.057, "d_episodes": 241, "d_frames": 654160, "d_hours": 6.057}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-15T10:09:50+00:00"},
+    "TacVerse/taccap-g1-place-egg-into-egg-tray-0815": {
+      "changes": [
+        {"date": "260816", "pulled_at": "2026-08-16T21:25:30", "total_episodes": 117, "total_frames": 638813, "duration_hours": 5.915, "d_episodes": 117, "d_frames": 638813, "d_hours": 5.915}],
+      "fps": 30, "robot_type": "bi_taccap_gripper", "total_tasks": 1, "uploader": "XR-Bot3", "last_modified": "2026-08-15T10:08:00+00:00"}
   }
 }

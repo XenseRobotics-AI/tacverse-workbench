@@ -17,6 +17,13 @@ quality_status.local.json
 __pycache__/
 *.py[cod]
 
+# Node / Next.js dependencies and caches
+node_modules/
+.next/
+out/
+dist/
+*.tsbuildinfo
+
 # Runtime logs
 *.log
 

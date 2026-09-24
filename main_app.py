@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import time
+import traceback
 import zipfile
 from pathlib import Path
 
@@ -48,6 +49,7 @@ def _configure_qt_plugin_path():
 _configure_qt_plugin_path()
 
 import pyqtgraph as pg
+from shiboken6 import isValid as qt_is_valid
 from PySide6.QtCore import QDate, Qt, QPoint, QRect, QSize, QThread, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QBrush, QColor, QDesktopServices, QFontDatabase, QIcon, QPalette, QPixmap,
@@ -78,6 +80,7 @@ OUT_DIR = str(Path(DATASETS_ROOT) / DEFAULT_DATASET_ORG)
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"  # logos / image assets
 LOGO_PATH = ASSETS_DIR / "logo.png"
 RECENT_ORGS = ["TacVerse", "Xense"]  # seeds the editable org combo
+DOWNLOAD_WORKER_RELEASE_DELAY_MS = 1000
 
 # Keep the widget palette independent from the host desktop theme.  Mixing
 # Windows' native dark/light palette with light, per-widget QSS made some text
@@ -403,18 +406,24 @@ def fmt_speed(bytes_per_sec):
 
 def dir_size(path):
     """Total bytes of materialized files under path (skips hf .cache blobs)."""
-    p = Path(path)
-    if not p.exists():
+    if path is None:
+        return 0
+    try:
+        p = Path(path)
+        if not p.exists():
+            return 0
+        files = p.rglob("*")
+    except OSError:
         return 0
     total = 0
-    for f in p.rglob("*"):
-        if ".cache" in f.parts:
-            continue
-        try:
+    try:
+        for f in files:
+            if ".cache" in f.parts:
+                continue
             if f.is_file():
                 total += f.stat().st_size
-        except OSError:
-            pass
+    except OSError:
+        pass
     return total
 
 
@@ -467,24 +476,37 @@ class FrozenDatasetTable(QWidget):
         self.detail.verticalHeader().setVisible(False)
         self.fixed.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
         self.fixed.setColumnWidth(0, frozen_width)
-        self.splitter.splitterMoved.connect(self._sync_fixed_column_width)
+        self.splitter.splitterMoved.connect(
+            lambda *args: self._safe_call(self._sync_fixed_column_width, *args))
 
         self.fixed.verticalScrollBar().valueChanged.connect(
             self.detail.verticalScrollBar().setValue)
         self.detail.verticalScrollBar().valueChanged.connect(
             self.fixed.verticalScrollBar().setValue)
         self.fixed.cellClicked.connect(
-            lambda row, _col: self._handle_cell_clicked(row, 0))
+            lambda row, _col: self._safe_call(self._handle_cell_clicked, row, 0))
         self.detail.cellClicked.connect(
-            lambda row, col: self._handle_cell_clicked(row, col + 1))
+            lambda row, col: self._safe_call(self._handle_cell_clicked, row, col + 1))
         self.fixed.cellDoubleClicked.connect(
             lambda row, col: self.cellDoubleClicked.emit(row, col))
         self.detail.cellDoubleClicked.connect(
             lambda row, col: self.cellDoubleClicked.emit(row, col + 1))
-        self.fixed.itemSelectionChanged.connect(lambda: self._sync_selection(self.fixed))
-        self.detail.itemSelectionChanged.connect(lambda: self._sync_selection(self.detail))
-        self.fixed.horizontalHeader().sectionClicked.connect(lambda _col: self.sortItems(0))
-        self.detail.horizontalHeader().sectionClicked.connect(lambda col: self.sortItems(col + 1))
+        self.fixed.itemSelectionChanged.connect(
+            lambda: self._safe_call(self._sync_selection, self.fixed))
+        self.detail.itemSelectionChanged.connect(
+            lambda: self._safe_call(self._sync_selection, self.detail))
+        self.fixed.horizontalHeader().sectionClicked.connect(
+            lambda _col: self._safe_call(self.sortItems, 0))
+        self.detail.horizontalHeader().sectionClicked.connect(
+            lambda col: self._safe_call(self.sortItems, col + 1))
+
+    @staticmethod
+    def _safe_call(func, *args):
+        try:
+            return func(*args)
+        except Exception:
+            traceback.print_exc()
+            return None
 
     def setHorizontalHeaderLabels(self, labels):
         self._columns = len(labels)
@@ -512,6 +534,10 @@ class FrozenDatasetTable(QWidget):
     def setSelectionBehavior(self, behavior):
         self.fixed.setSelectionBehavior(behavior)
         self.detail.setSelectionBehavior(behavior)
+
+    def setSelectionMode(self, mode):
+        self.fixed.setSelectionMode(mode)
+        self.detail.setSelectionMode(mode)
 
     def setRowCount(self, rows):
         self.fixed.setRowCount(rows)
@@ -552,20 +578,45 @@ class FrozenDatasetTable(QWidget):
     def selectRow(self, row):
         self.fixed.blockSignals(True)
         self.detail.blockSignals(True)
-        self.fixed.selectRow(row)
-        self.detail.selectRow(row)
-        self.fixed.blockSignals(False)
-        self.detail.blockSignals(False)
+        try:
+            self.fixed.selectRow(row)
+            self.detail.selectRow(row)
+        finally:
+            self.fixed.blockSignals(False)
+            self.detail.blockSignals(False)
         self.itemSelectionChanged.emit()
 
+    def selectedRows(self):
+        rows = set()
+        for table in (self.fixed, self.detail):
+            rows.update(index.row() for index in table.selectionModel().selectedIndexes())
+        if not rows:
+            row = self.currentRow()
+            if row >= 0:
+                rows.add(row)
+        return sorted(rows)
+
     def _handle_cell_clicked(self, row, column):
-        self.selectRow(row)
+        modifiers = QApplication.keyboardModifiers()
+        if not (modifiers & (Qt.ControlModifier | Qt.ShiftModifier)):
+            self.selectRow(row)
         self.cellClicked.emit(row, column)
 
     def _sync_selection(self, source):
-        row = source.currentRow()
-        if row >= 0:
-            self.selectRow(row)
+        target = self.detail if source is self.fixed else self.fixed
+        rows = sorted({
+            index.row() for index in source.selectionModel().selectedIndexes()
+            if 0 <= index.row() < target.rowCount()
+        })
+        target.blockSignals(True)
+        try:
+            target.clearSelection()
+            for row in rows:
+                target.selectRow(row)
+        finally:
+            target.blockSignals(False)
+        if rows:
+            self.itemSelectionChanged.emit()
 
     def sortItems(self, column, order=None):
         if order is None:
@@ -643,7 +694,7 @@ class PullWorker(QThread):
 
 
 class DownloadOneWorker(QThread):
-    """Download a single selected dataset (not the whole org) to save time."""
+    """Download or incrementally sync one selected dataset."""
 
     done = Signal(str)   # local_dir of the downloaded dataset
     log = Signal(str)
@@ -652,6 +703,8 @@ class DownloadOneWorker(QThread):
     def __init__(self, repo_id, out_dir, token):
         super().__init__()
         self.repo_id, self.out_dir, self.token = repo_id, out_dir, token
+        self.local_dir = ""
+        self.error_msg = ""
 
     def run(self):
         try:
@@ -662,9 +715,13 @@ class DownloadOneWorker(QThread):
                 self.repo_id, dataset_dir, revision=None, token=self.token,
                 log=self.log.emit,
             )
-            self.done.emit(str(dataset_dir / self.repo_id.split("/")[-1]))
+            self.local_dir = str(dataset_dir / self.repo_id.split("/")[-1])
         except Exception as exc:
-            self.error.emit(str(exc))
+            self.error_msg = str(exc)
+        else:
+            self.done.emit(self.local_dir)
+        if self.error_msg:
+            self.error.emit(self.error_msg)
 
 
 class StatsWorker(QThread):
@@ -747,8 +804,7 @@ class IdentityWorker(QThread):
         name = ""
         if self.token:
             try:
-                from huggingface_hub import HfApi
-                name = HfApi().whoami(token=self.token).get("name", "") or ""
+                name = dd.fetch_username(self.token)
             except Exception:
                 name = ""  # token present but invalid/expired
         try:
@@ -1049,8 +1105,12 @@ class MainWindow(QWidget):
         self.worker = None
         self._pull_worker = None
         self._check_worker = None
-        self.dl_worker = None
-        self._download_done_path = ""
+        self._download_workers = []
+        self._download_started = 0
+        self._download_completed = 0
+        self._download_successes = []
+        self._download_failures = []
+        self._retired_download_workers = []
         self._download_message_box = None
         self._stats_worker = None
         self._closing = False
@@ -1065,7 +1125,6 @@ class MainWindow(QWidget):
         self.viewer = vsvc.ViewerService(port=3001)
         self._report_workers = []   # in-flight ReportWorkers
         self._report_seq = 0        # only the latest selection's report renders
-        self._report_cache = {}     # rel_path -> report dict (per session)
         self._pico_workers = []     # in-flight opt-in trajectory scans
         self._pico_seq = 0
         self._pico_cache = {}       # dataset path -> DetectionResult or error tuple
@@ -1108,10 +1167,12 @@ class MainWindow(QWidget):
         self._prev_t = None
         self.speed_timer = QTimer(self)
         self.speed_timer.setInterval(1000)
-        self.speed_timer.timeout.connect(self._tick_speed)
+        self.speed_timer.timeout.connect(
+            self._guarded("测速刷新", self._tick_speed, stop_speed=False))
         self.quality_status_timer = QTimer(self)
         self.quality_status_timer.setInterval(3000)
-        self.quality_status_timer.timeout.connect(self._sync_quality_status_from_disk)
+        self.quality_status_timer.timeout.connect(
+            self._guarded("同步检查状态", self._sync_quality_status_from_disk))
         self.quality_status_timer.start()
         app = QApplication.instance()
         if app is not None:
@@ -1126,16 +1187,32 @@ class MainWindow(QWidget):
         except OSError as exc:
             migration_note = f"；旧历史迁移失败: {exc}"
         active_org = self.org_combo.currentText().strip() or dd.ORG
-        self.history = dd.load_history(OUT_DIR, org=active_org)
-        self.hf_changes = dd.load_hf_change_history()
+        try:
+            self.history = dd.load_history(OUT_DIR, org=active_org)
+            self.hf_changes = dd.load_hf_change_history()
+        except Exception as exc:
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            self.history = []
+            self.hf_changes = {"version": 1, "repos": {}}
+            migration_note += f"；本地历史读取失败: {exc}"
         last = self.history[-1] if self.history else None
         if last:
             self.report = last
-            self._refresh_all()
-            self._show_stale_banner(last)
+            try:
+                self._refresh_all()
+                self._show_stale_banner(last)
+            except Exception as exc:
+                self._handle_ui_exception("加载本地快照", exc, stop_speed=False)
+                self.report = None
+                self.history = []
+                self._set_rollup_range_defaults()
+                self._refresh_rollup()
         else:
             self._set_rollup_range_defaults()
-            self._refresh_rollup()
+            try:
+                self._refresh_rollup()
+            except Exception as exc:
+                self._handle_ui_exception("初始化分组统计", exc, stop_speed=False)
         self.status.setText(
             "就绪：「仅拉取统计信息」(快) / 「下载当前选中数据集」/ "
             f"「拉取组织及其下所有数据集」{migration_note}。")
@@ -1224,16 +1301,20 @@ class MainWindow(QWidget):
         self.org_combo.addItems(RECENT_ORGS)
         self.org_combo.setMinimumWidth(160)
         self.org_combo.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.org_combo.currentIndexChanged.connect(self._refresh_identity)
-        self.org_combo.lineEdit().editingFinished.connect(self._refresh_identity)
+        self.org_combo.currentIndexChanged.connect(
+            self._guarded("刷新登录状态", self._refresh_identity))
+        self.org_combo.lineEdit().editingFinished.connect(
+            self._guarded("刷新登录状态", self._refresh_identity))
         row1.addWidget(self.org_combo)
 
         separator(row1)
         section_label("数据获取", row1)
         self.btn_stats = QPushButton("刷新统计")
         self.btn_stats.setToolTip("仅获取数据集元信息，不下载 Parquet 和视频，速度最快。")
-        self.btn_download = QPushButton("下载选中")
-        self.btn_download.setToolTip("下载当前表格中选中的一个数据集。")
+        self.btn_download = QPushButton("下载/同步选中")
+        self.btn_download.setToolTip(
+            "下载或增量同步当前表格中选中的一个或多个数据集；"
+            "已存在的本地目录会补齐新增/缺失文件，可 Ctrl/Shift 多选。")
         self.btn_pull = QPushButton("同步全部")
         self.btn_pull.setToolTip("下载当前组织下全部数据集，速度较慢并占用磁盘空间。")
         for button in (self.btn_stats, self.btn_download, self.btn_pull):
@@ -1247,12 +1328,14 @@ class MainWindow(QWidget):
         self.btn_manual_stats.setToolTip("手动补录某一天的数据集统计快照。")
         self.btn_open = QPushButton("数据目录")
         self.btn_open.setToolTip("打开本地 datasets/TacVerse/ 目录。")
-        self.btn_stats.clicked.connect(self.on_stats)
-        self.btn_download.clicked.connect(self.on_download_selected)
-        self.btn_pull.clicked.connect(self.on_pull)
-        self.btn_check.clicked.connect(self.on_check)
-        self.btn_manual_stats.clicked.connect(self.on_manual_stats)
-        self.btn_open.clicked.connect(self.on_open_dir)
+        self.btn_stats.clicked.connect(self._guarded("刷新统计", self.on_stats))
+        self.btn_download.clicked.connect(
+            self._guarded("下载/同步选中数据集", self.on_download_selected))
+        self.btn_pull.clicked.connect(self._guarded("同步全部数据集", self.on_pull))
+        self.btn_check.clicked.connect(self._guarded("检查新增", self.on_check))
+        self.btn_manual_stats.clicked.connect(
+            self._guarded("手动补录统计", self.on_manual_stats))
+        self.btn_open.clicked.connect(self._guarded("打开数据目录", self.on_open_dir))
 
         primary_css = (
             "QPushButton { font-weight: bold; padding: 6px 13px; border-radius: 6px;"
@@ -1289,7 +1372,8 @@ class MainWindow(QWidget):
         self.btn_account = QPushButton("切换账号")
         self.btn_account.setStyleSheet(secondary_css)
         self.btn_account.setToolTip("切换 Hugging Face 账号或更新访问令牌。")
-        self.btn_account.clicked.connect(self.on_switch_account)
+        self.btn_account.clicked.connect(
+            self._guarded("切换账号", self.on_switch_account))
         row2.addWidget(self.btn_account)
         self.identity_label = QLabel("登录状态: 检测中…")
         self.identity_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -1308,10 +1392,14 @@ class MainWindow(QWidget):
         self.top_viewer_home = QPushButton("首页")
         self.open_viewer_btn = QPushButton("打开选中")
         self.open_viewer_btn.setToolTip("在浏览器的 Viewer 里打开选中的数据集")
-        self.top_viewer_start.clicked.connect(self._viewer_start)
-        self.top_viewer_stop.clicked.connect(self._viewer_stop)
-        self.top_viewer_home.clicked.connect(self._viewer_open_home)
-        self.open_viewer_btn.clicked.connect(self._open_selected_in_viewer)
+        self.top_viewer_start.clicked.connect(
+            self._guarded("启动 Viewer", self._viewer_start))
+        self.top_viewer_stop.clicked.connect(
+            self._guarded("停止 Viewer", self._viewer_stop))
+        self.top_viewer_home.clicked.connect(
+            self._guarded("打开 Viewer 首页", self._viewer_open_home))
+        self.open_viewer_btn.clicked.connect(
+            self._guarded("打开选中数据集 Viewer", self._open_selected_in_viewer))
         for b in (self.top_viewer_start, self.top_viewer_stop,
                   self.top_viewer_home, self.open_viewer_btn):
             b.setStyleSheet(secondary_css)
@@ -1323,7 +1411,8 @@ class MainWindow(QWidget):
         self.target_spin = QSpinBox()
         self.target_spin.setRange(0, 100000)
         self.target_spin.setValue(10)
-        self.target_spin.valueChanged.connect(self._refresh_kpis)
+        self.target_spin.valueChanged.connect(
+            self._guarded("刷新 KPI", self._refresh_kpis))
         self.target_spin.setFixedWidth(72)
         self.target_spin.setToolTip("用于计算看板中的每日目标完成度。")
         row2.addWidget(self.target_spin)
@@ -1335,7 +1424,8 @@ class MainWindow(QWidget):
         self.clock_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         row2.addWidget(self.clock_label)
         self.clock_timer = QTimer(self)
-        self.clock_timer.timeout.connect(self._tick_clock)
+        self.clock_timer.timeout.connect(
+            self._guarded("刷新时钟", self._tick_clock))
         self.clock_timer.start(1000)
         self._tick_clock()
         toolbar.addLayout(row1)
@@ -1427,10 +1517,12 @@ class MainWindow(QWidget):
         filt.addWidget(QLabel("筛选:"))
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText("按 名称 / robot_type / 上传者 过滤…")
-        self.filter_edit.textChanged.connect(self._apply_filter)
+        self.filter_edit.textChanged.connect(
+            self._guarded("筛选看板", self._apply_filter))
         filt.addWidget(self.filter_edit)
         self.only_issues = QCheckBox("只看有问题的")
-        self.only_issues.toggled.connect(self._apply_filter)
+        self.only_issues.toggled.connect(
+            self._guarded("筛选问题数据集", self._apply_filter))
         filt.addWidget(self.only_issues)
         lv.addLayout(filt)
 
@@ -1439,14 +1531,18 @@ class MainWindow(QWidget):
             0, len(TABLE_COLS), frozen_width=self.dataset_column_width)
         self.table.setHorizontalHeaderLabels([c[0] for c in TABLE_COLS])
         self.table.horizontalHeaderItem(LOCAL_COL).setToolTip(
-            "本地文件表示原始数据是否已下载到 pulls/，已下载的数据集可在 Viewer 打开。")
+            "本地文件表示原始数据是否已下载到 datasets/<组织名>/，已下载的数据集可在 Viewer 打开。")
         self.table.setSortingEnabled(True)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.table.verticalHeader().setVisible(False)
-        self.table.cellClicked.connect(self._on_table_cell_clicked)
-        self.table.cellDoubleClicked.connect(self._open_row_link)
-        self.table.itemSelectionChanged.connect(self._on_dataset_selected)
+        self.table.cellClicked.connect(
+            self._guarded("打开检查报告入口", self._on_table_cell_clicked, pass_args=True))
+        self.table.cellDoubleClicked.connect(
+            self._guarded("打开 HF 页面", self._open_row_link, pass_args=True))
+        self.table.itemSelectionChanged.connect(
+            self._guarded("刷新数据集详情面板", self._on_dataset_selected))
         hdr = self.table.detail.horizontalHeader()
         for i in range(self.table.detail.columnCount()):
             hdr.setSectionResizeMode(i, QHeaderView.ResizeToContents)
@@ -1478,7 +1574,8 @@ class MainWindow(QWidget):
             width = split.width()
             if width > 1:
                 split.setSizes([width // 2, width - width // 2])
-        QTimer.singleShot(0, equalize_main_splitter)
+        QTimer.singleShot(
+            0, self._guarded("初始化主分割栏", equalize_main_splitter))
         outer.addWidget(split)
         return w
 
@@ -1542,9 +1639,9 @@ class MainWindow(QWidget):
             button.setAutoExclusive(True)
         self.data_check_mode_button.setChecked(True)
         self.data_check_mode_button.clicked.connect(
-            lambda: self._set_detail_mode("checks"))
+            self._guarded("切换数据检查视图", lambda: self._set_detail_mode("checks")))
         self.doctor_mode_button.clicked.connect(
-            lambda: self._set_detail_mode("doctor"))
+            self._guarded("切换 Doctor 视图", lambda: self._set_detail_mode("doctor")))
         mode_row.addWidget(self.data_check_mode_button)
         mode_row.addWidget(self.doctor_mode_button)
         mode_row.addStretch(1)
@@ -1582,7 +1679,8 @@ class MainWindow(QWidget):
         ep_row = QHBoxLayout()
         ep_row.addWidget(QLabel("集:"))
         self.prompt_ep = QComboBox()
-        self.prompt_ep.currentIndexChanged.connect(self._refresh_prompt_tree)
+        self.prompt_ep.currentIndexChanged.connect(
+            self._guarded("刷新语言标注", self._refresh_prompt_tree))
         ep_row.addWidget(self.prompt_ep, 1)
         self.prompt_ep_wrap = QWidget()
         self.prompt_ep_wrap.setLayout(ep_row)
@@ -1645,18 +1743,24 @@ class MainWindow(QWidget):
         self.btn_quality_check = QPushButton("执行深度检查")
         self.btn_quality_check.setToolTip(
             "检查本地数据；未下载时按配置只缓存检查所需的远程文件。")
-        self.btn_quality_check.clicked.connect(self.on_quality_check)
+        self.btn_quality_check.clicked.connect(
+            self._guarded("执行深度检查", self.on_quality_check))
         self.btn_quality_cancel = QPushButton("取消")
         self.btn_quality_cancel.setEnabled(False)
-        self.btn_quality_cancel.clicked.connect(self.on_quality_cancel)
+        self.btn_quality_cancel.clicked.connect(
+            self._guarded("取消深度检查", self.on_quality_cancel))
         self.btn_open_quality_report = QPushButton("打开报告")
-        self.btn_open_quality_report.clicked.connect(self.on_open_quality_report)
+        self.btn_open_quality_report.clicked.connect(
+            self._guarded("打开检查报告", self.on_open_quality_report))
         self.btn_export_quality_report = QPushButton("导出 ZIP")
-        self.btn_export_quality_report.clicked.connect(self.on_export_quality_report)
+        self.btn_export_quality_report.clicked.connect(
+            self._guarded("导出检查报告", self.on_export_quality_report))
         self.btn_clear_quality_reports = QPushButton("清理报告")
-        self.btn_clear_quality_reports.clicked.connect(self.on_clear_quality_reports)
+        self.btn_clear_quality_reports.clicked.connect(
+            self._guarded("清理检查报告", self.on_clear_quality_reports))
         self.btn_clear_quality_cache = QPushButton("清理缓存")
-        self.btn_clear_quality_cache.clicked.connect(self.on_clear_quality_cache)
+        self.btn_clear_quality_cache.clicked.connect(
+            self._guarded("清理检查缓存", self.on_clear_quality_cache))
         for index, button in enumerate((
             self.btn_quality_check, self.btn_quality_cancel,
             self.btn_open_quality_report, self.btn_export_quality_report,
@@ -1676,7 +1780,8 @@ class MainWindow(QWidget):
         rul.addWidget(self.quality_note)
         pico_row = QHBoxLayout()
         self.pico_check_button = QPushButton("检查 PICO MoTracker 轨迹")
-        self.pico_check_button.clicked.connect(self._start_pico_check)
+        self.pico_check_button.clicked.connect(
+            self._guarded("检查 PICO MoTracker 轨迹", self._start_pico_check))
         pico_row.addWidget(self.pico_check_button)
         self.pico_check_status = QLabel("未检测")
         self.pico_check_status.setStyleSheet("color:#888; font-size:11px;")
@@ -1694,7 +1799,9 @@ class MainWindow(QWidget):
         for label in ("确认问题", "误报", "已修复", "未确认"):
             button = QPushButton(label)
             button.clicked.connect(
-                lambda _checked=False, status=label: self.on_mark_quality_issue(status))
+                self._guarded(
+                    f"标记问题为{label}",
+                    lambda status=label: self.on_mark_quality_issue(status)))
             review_actions.addWidget(button)
         rul.addLayout(review_actions)
         self.quality_issue_tree = QTreeWidget()
@@ -1790,7 +1897,8 @@ class MainWindow(QWidget):
         self.doctor_scope.addItem("前 100 个 Episode", {"maxEpisodes": 100})
         self.doctor_scope.addItem("全部 Episode", {"maxEpisodes": None})
         self.doctor_scope.addItem("自定义 Episode 范围", {"episodeRange": True})
-        self.doctor_scope.currentIndexChanged.connect(self._doctor_scope_changed)
+        self.doctor_scope.currentIndexChanged.connect(
+            self._guarded("切换 Doctor 范围", self._doctor_scope_changed))
         controls.addWidget(self.doctor_scope, 1)
         self.doctor_range_start = QSpinBox()
         self.doctor_range_start.setRange(0, 1_000_000)
@@ -1805,11 +1913,13 @@ class MainWindow(QWidget):
         self.doctor_range_end.setVisible(False)
         controls.addWidget(self.doctor_range_end)
         self.doctor_run_button = QPushButton("运行 Doctor")
-        self.doctor_run_button.clicked.connect(self._start_doctor)
+        self.doctor_run_button.clicked.connect(
+            self._guarded("运行 Doctor", self._start_doctor))
         controls.addWidget(self.doctor_run_button)
         self.doctor_export_button = QPushButton("导出 JSON")
         self.doctor_export_button.setEnabled(False)
-        self.doctor_export_button.clicked.connect(self._export_doctor)
+        self.doctor_export_button.clicked.connect(
+            self._guarded("导出 Doctor JSON", self._export_doctor))
         controls.addWidget(self.doctor_export_button)
         layout.addLayout(controls)
 
@@ -1932,7 +2042,8 @@ class MainWindow(QWidget):
         self.trend_plot.getAxis("right").linkToView(self.trend_cum_view)
         self.trend_cum_view.setXLink(self.trend_plot)
         self.trend_plot.hideAxis("right")
-        self.trend_plot.getViewBox().sigResized.connect(self._sync_trend_cum_view)
+        self.trend_plot.getViewBox().sigResized.connect(
+            self._guarded("同步趋势图坐标", self._sync_trend_cum_view))
         v.addWidget(self.trend_plot, 1)
         return w
 
@@ -1950,7 +2061,8 @@ class MainWindow(QWidget):
         row.addWidget(QLabel("分组维度:"))
         self.dim_combo = QComboBox()
         self.dim_combo.addItems(list(ROLLUP_DIMS.keys()))
-        self.dim_combo.currentTextChanged.connect(self._refresh_rollup)
+        self.dim_combo.currentTextChanged.connect(
+            self._guarded("刷新分组统计", self._refresh_rollup))
         row.addWidget(self.dim_combo)
         row.addSpacing(12)
         row.addWidget(QLabel("时间范围:"))
@@ -1966,10 +2078,12 @@ class MainWindow(QWidget):
         self.rollup_end_date.setToolTip("区间结束日期")
         row.addWidget(self.rollup_end_date)
         self.rollup_apply_btn = QPushButton("应用")
-        self.rollup_apply_btn.clicked.connect(self._refresh_rollup)
+        self.rollup_apply_btn.clicked.connect(
+            self._guarded("应用分组统计范围", self._refresh_rollup))
         row.addWidget(self.rollup_apply_btn)
         self.rollup_reset_btn = QPushButton("全量")
-        self.rollup_reset_btn.clicked.connect(self._reset_rollup_range)
+        self.rollup_reset_btn.clicked.connect(
+            self._guarded("重置分组统计范围", self._reset_rollup_range))
         row.addWidget(self.rollup_reset_btn)
         row.addStretch()
         v.addLayout(row)
@@ -2063,24 +2177,27 @@ class MainWindow(QWidget):
         ef.addWidget(QLabel("筛选:"))
         self.edit_filter = QLineEdit()
         self.edit_filter.setPlaceholderText("按 名称 / robot_type / 上传者 过滤…")
-        self.edit_filter.textChanged.connect(self._apply_edit_filter)
+        self.edit_filter.textChanged.connect(
+            self._guarded("筛选编辑表格", self._apply_edit_filter))
         ef.addWidget(self.edit_filter)
         self.edit_only_downloaded = QCheckBox("只看已下载")
         self.edit_only_downloaded.setChecked(True)
-        self.edit_only_downloaded.toggled.connect(self._apply_edit_filter)
+        self.edit_only_downloaded.toggled.connect(
+            self._guarded("筛选已下载数据集", self._apply_edit_filter))
         ef.addWidget(self.edit_only_downloaded)
         lv.addLayout(ef)
 
         self.edit_table = QTableWidget(0, len(TABLE_COLS))
         self.edit_table.setHorizontalHeaderLabels([c[0] for c in TABLE_COLS])
         self.edit_table.horizontalHeaderItem(LOCAL_COL).setToolTip(
-            "本地文件表示原始数据是否已下载到 pulls/，已下载的数据集可编辑或在 Viewer 打开。")
+            "本地文件表示原始数据是否已下载到 datasets/<组织名>/，已下载的数据集可编辑或在 Viewer 打开。")
         self.edit_table.setSortingEnabled(True)
         self.edit_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.edit_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.edit_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.edit_table.verticalHeader().setVisible(False)
-        self.edit_table.itemSelectionChanged.connect(self._refresh_edit_tab)
+        self.edit_table.itemSelectionChanged.connect(
+            self._guarded("刷新编辑面板", self._refresh_edit_tab))
         ehdr = self.edit_table.horizontalHeader()
         ehdr.setSectionResizeMode(0, QHeaderView.Interactive)
         for i in range(1, len(TABLE_COLS)):
@@ -2128,7 +2245,8 @@ class MainWindow(QWidget):
             f" color:white; background:{UI_COLORS['green']}; }}"
             f"QPushButton:hover {{ background:{UI_COLORS['green_hover']}; }}"
             "QPushButton:disabled { background:#B0B0B0; }")
-        self.btn_make_copy.clicked.connect(self.on_make_copy)
+        self.btn_make_copy.clicked.connect(
+            self._guarded("生成数据集副本", self.on_make_copy))
         self.btn_push_copy = QPushButton("推送到 Hub")
         self.btn_push_copy.setMinimumHeight(32)
         self.btn_push_copy.setStyleSheet(
@@ -2136,7 +2254,8 @@ class MainWindow(QWidget):
             f" border:1px solid {UI_COLORS['border_strong']}; background:{UI_COLORS['surface']}; }}"
             "QPushButton:hover { background:#F2F4F7; border-color:#98A2B3; }"
             f"QPushButton:disabled {{ color:{UI_COLORS['text_disabled']}; }}")
-        self.btn_push_copy.clicked.connect(self.on_push_copy)
+        self.btn_push_copy.clicked.connect(
+            self._guarded("推送数据集副本", self.on_push_copy))
         arow.addWidget(self.btn_make_copy)
         arow.addWidget(self.btn_push_copy)
         arow.addStretch()
@@ -2144,14 +2263,15 @@ class MainWindow(QWidget):
         rv.addWidget(boxA)
 
         # ---- Group B: lerobot 数据集操作 ----
-        boxB = QGroupBox("② 数据集操作（lerobot：删 / 拆 / 并 / 特征）")
+        boxB = QGroupBox("② 数据集操作（lerobot：生成新输出，不改源目录）")
         bv = QVBoxLayout(boxB)
         oprow = QHBoxLayout()
         oprow.addWidget(QLabel("操作:"))
         self.op_combo = QComboBox()
         self.op_combo.addItems(
             ["删除 episodes", "拆分数据集", "合并数据集", "增加特征", "删除特征"])
-        self.op_combo.currentIndexChanged.connect(self._on_op_changed)
+        self.op_combo.currentIndexChanged.connect(
+            self._guarded("切换数据集操作", self._on_op_changed, pass_args=True))
         oprow.addWidget(self.op_combo, 1)
         bv.addLayout(oprow)
         self.op_stack = QStackedWidget()
@@ -2168,10 +2288,11 @@ class MainWindow(QWidget):
             f" color:white; background:{UI_COLORS['blue']}; }}"
             f"QPushButton:hover {{ background:{UI_COLORS['blue_hover']}; }}"
             "QPushButton:disabled { background:#B0B0B0; }")
-        self.btn_run_op.clicked.connect(self.on_run_op)
+        self.btn_run_op.clicked.connect(
+            self._guarded("执行数据集操作", self.on_run_op))
         bv.addWidget(self.btn_run_op)
         self.op_note = QLabel(
-            "输出写到 datasets/<组织名>/，视频操作用 CPU 编码(libx264)较慢，请耐心等待。")
+            "所有操作只写到新的 datasets/<组织名>/<输出名> 目录；若目标已存在会停止，源数据目录不覆盖。")
         self.op_note.setStyleSheet("color:#888; font-size:12px;")
         self.op_note.setWordWrap(True)
         bv.addWidget(self.op_note)
@@ -2203,7 +2324,7 @@ class MainWindow(QWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.addWidget(QLabel("要删除的 episode 序号（逗号分隔，如 0,2,5）:"))
+        v.addWidget(QLabel("要从新输出中排除的 episode 序号（源数据不改，逗号分隔，如 0,2,5）:"))
         self.op_del_indices = QLineEdit()
         self.op_del_indices.setPlaceholderText("0,2,5")
         v.addWidget(self.op_del_indices)
@@ -2213,7 +2334,7 @@ class MainWindow(QWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.addWidget(QLabel("拆分方式（比例或序号区间）:"))
+        v.addWidget(QLabel("拆分方式（生成 <输出名>_<split>，源数据不改；比例或序号区间）:"))
         self.op_split_spec = QLineEdit()
         self.op_split_spec.setPlaceholderText("train:0.8,val:0.2  或  train:0-4,val:5-6")
         v.addWidget(self.op_split_spec)
@@ -2259,7 +2380,7 @@ class MainWindow(QWidget):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 0, 0, 0)
-        v.addWidget(QLabel("勾选要删除的特征 / 相机:"))
+        v.addWidget(QLabel("要从新输出中移除的特征 / 相机（源数据不改）:"))
         self.op_rm_list = QListWidget()
         self.op_rm_list.setMaximumHeight(160)
         v.addWidget(self.op_rm_list)
@@ -2451,8 +2572,10 @@ class MainWindow(QWidget):
         self.status.setText(f"生成副本 {dst} ...")
         self.edit_result.setText("")
         self._edit_worker = EditWorker(str(src), str(dst), replacements)
-        self._edit_worker.done.connect(self._on_edit_done)
-        self._edit_worker.error.connect(self._on_worker_error)
+        self._edit_worker.done.connect(
+            self._guarded("生成数据集副本", self._on_edit_done, pass_args=True))
+        self._edit_worker.error.connect(
+            self._guarded("生成数据集副本", self._on_worker_error, pass_args=True))
         self._edit_worker.finished.connect(
             lambda worker=self._edit_worker:
             self._on_one_shot_worker_finished("_edit_worker", worker))
@@ -2495,8 +2618,10 @@ class MainWindow(QWidget):
         self.status.setText(f"上传到 {repo_id} ...")
         self._push_worker = PushWorker(
             str(self._last_copy_dir), repo_id, self.token, private=True)
-        self._push_worker.done.connect(self._on_push_done)
-        self._push_worker.error.connect(self._on_worker_error)
+        self._push_worker.done.connect(
+            self._guarded("推送数据集副本", self._on_push_done, pass_args=True))
+        self._push_worker.error.connect(
+            self._guarded("推送数据集副本", self._on_worker_error, pass_args=True))
         self._push_worker.finished.connect(
             lambda worker=self._push_worker:
             self._on_one_shot_worker_finished("_push_worker", worker))
@@ -2644,8 +2769,10 @@ class MainWindow(QWidget):
         self.status.setText(f"执行 {self.op_combo.currentText()} ...（视频操作较慢）")
         self._op_worker = LerobotOpWorker(spec)
         self._op_worker.log.connect(self.status.setText)
-        self._op_worker.done.connect(self._on_op_done)
-        self._op_worker.error.connect(self._on_worker_error)
+        self._op_worker.done.connect(
+            self._guarded("执行数据集操作", self._on_op_done, pass_args=True))
+        self._op_worker.error.connect(
+            self._guarded("执行数据集操作", self._on_worker_error, pass_args=True))
         self._op_worker.finished.connect(
             lambda worker=self._op_worker:
             self._on_one_shot_worker_finished("_op_worker", worker))
@@ -2686,11 +2813,14 @@ class MainWindow(QWidget):
 
         row = QHBoxLayout()
         self.viewer_start_btn = QPushButton("启动 Viewer")
-        self.viewer_start_btn.clicked.connect(self._viewer_start)
+        self.viewer_start_btn.clicked.connect(
+            self._guarded("启动 Viewer", self._viewer_start))
         self.viewer_stop_btn = QPushButton("停止")
-        self.viewer_stop_btn.clicked.connect(self._viewer_stop)
+        self.viewer_stop_btn.clicked.connect(
+            self._guarded("停止 Viewer", self._viewer_stop))
         self.viewer_home_btn = QPushButton("打开首页")
-        self.viewer_home_btn.clicked.connect(self._viewer_open_home)
+        self.viewer_home_btn.clicked.connect(
+            self._guarded("打开 Viewer 首页", self._viewer_open_home))
         for b in (self.viewer_start_btn, self.viewer_stop_btn, self.viewer_home_btn):
             row.addWidget(b)
         row.addStretch()
@@ -2710,14 +2840,15 @@ class MainWindow(QWidget):
         self._viewer_tick = 0
         self._viewer_count = None
         self.viewer_timer = QTimer(self)
-        self.viewer_timer.timeout.connect(self._refresh_viewer_status)
+        self.viewer_timer.timeout.connect(
+            self._guarded("刷新 Viewer 状态", self._refresh_viewer_status))
         self.viewer_timer.start(2000)
         self._refresh_viewer_status()
         return w
 
     def _viewer_start(self):
         if not self.viewer.available():
-            msg = f"Viewer 未就绪：请在 {self.viewer.viewer_dir} 执行 bun install"
+            msg = f"Viewer 未就绪：{vsvc.install_hint(self.viewer.viewer_dir)}"
             self.viewer_detail.setText(msg)
             self.status.setText(msg)
             return
@@ -2953,13 +3084,12 @@ class MainWindow(QWidget):
             f"{fmt_day(top['date'])} · {top['hours']} 小时 · {fmt_value(top['episodes'])} episodes")
 
     def _downloaded_leaves(self):
-        """Leaf names of datasets whose raw files are under datasets/TacVerse/.
+        """Leaf names of datasets whose raw files are under datasets/<org>/.
 
-        A dataset counts as downloaded when datasets/TacVerse/<leaf>/meta/info.json
+        A dataset counts as downloaded when datasets/<org>/<leaf>/meta/info.json
         exists (a full 拉取 writes it; 统计-only never touches datasets/). Only these
         can be opened in the viewer. Scanned once per table refresh."""
-        return {info.parent.parent.name
-                for info in Path(OUT_DIR).glob("*/meta/info.json")}
+        return set(self._downloaded_dataset_dirs())
 
     def _fill_dataset_table(self, table, datasets, deltas, downloaded):
         """Populate a QTableWidget with the dataset detail rows (shared by the
@@ -3117,6 +3247,21 @@ class MainWindow(QWidget):
         item = self.table.item(row, 0)
         return item.data(Qt.UserRole) if item else None
 
+    def _selected_datasets(self):
+        """Return unique selected datasets in table order, skipping hidden rows."""
+        datasets = []
+        seen = set()
+        for row in self.table.selectedRows():
+            if self.table.fixed.isRowHidden(row):
+                continue
+            item = self.table.item(row, 0)
+            d = item.data(Qt.UserRole) if item else None
+            name = (d or {}).get("dataset_name")
+            if name and name not in seen:
+                seen.add(name)
+                datasets.append(d)
+        return datasets
+
     def _show_prompt_empty(self, msg):
         """Show only the centered fallback label (nothing selected)."""
         self.prompt_empty.setText(msg)
@@ -3213,10 +3358,14 @@ class MainWindow(QWidget):
         self.doctor_progress.setFormat("%p%")
         self.doctor_status.setText("正在启动 Doctor…")
         worker = DoctorWorker(self.viewer, rel, scope, seq)
-        worker.progress.connect(self._on_doctor_progress)
+        worker.progress.connect(
+            self._guarded("刷新 Doctor 进度", self._on_doctor_progress, pass_args=True))
         worker.done.connect(
-            lambda done_seq, key, result, error:
-            self._on_doctor_done(done_seq, key, result, error, cache_key))
+            self._guarded(
+                "渲染 Doctor 结果",
+                lambda done_seq, key, result, error:
+                self._on_doctor_done(done_seq, key, result, error, cache_key),
+                pass_args=True))
         worker.finished.connect(
             lambda worker=worker: self._forget_worker("_doctor_workers", worker))
         self._doctor_workers.append(worker)
@@ -3388,9 +3537,12 @@ class MainWindow(QWidget):
                 "episode_local_quality", "Episode 级质量定位", "local_quality",
                 chk_mod.SKIP, "检查中...", [])])
         self.quality_worker = QualityWorker(seq, dataset, self.token, _CHECKS_CFG)
-        self.quality_worker.progress.connect(self._on_quality_progress)
-        self.quality_worker.done.connect(self._on_quality_done)
-        self.quality_worker.finished.connect(self._on_quality_worker_finished)
+        self.quality_worker.progress.connect(
+            self._guarded("刷新深度检查进度", self._on_quality_progress, pass_args=True))
+        self.quality_worker.done.connect(
+            self._guarded("渲染深度检查结果", self._on_quality_done, pass_args=True))
+        self.quality_worker.finished.connect(
+            self._guarded("结束深度检查", self._on_quality_worker_finished))
         self.quality_worker.start()
 
     def on_quality_cancel(self):
@@ -3575,7 +3727,8 @@ class MainWindow(QWidget):
             _CHECKS_CFG.get("pico_motracker", {}),
             seq,
         )
-        worker.done.connect(self._on_pico_check_done)
+        worker.done.connect(
+            self._guarded("渲染 PICO 检查结果", self._on_pico_check_done, pass_args=True))
         worker.finished.connect(
             lambda worker=worker: self._forget_worker("_pico_workers", worker))
         self._pico_workers.append(worker)
@@ -3721,7 +3874,7 @@ class MainWindow(QWidget):
     def _refresh_report(self, d):
         """Fill STATISTICS / FILTERING / ACTION INSIGHTS from the viewer /report
         analysis for the selected dataset. Fetched in a background thread (can
-        take tens of seconds); cached per session; stale selections ignored."""
+        take tens of seconds); stale selections are ignored."""
         if self._closing:
             return
         self._report_seq += 1
@@ -3733,13 +3886,10 @@ class MainWindow(QWidget):
         if not rel:
             self._report_set_note("该数据集不在 Viewer 数据根，暂无分析。")
             return
-        cached = self._report_cache.get(rel)
-        if cached is not None:
-            self._render_report(cached)
-            return
         self._report_set_note("分析中…（首次约 10–30s）", busy=True)
         w = ReportWorker(self.viewer, rel, seq)
-        w.done.connect(self._on_report_done)
+        w.done.connect(
+            self._guarded("渲染 Viewer 分析", self._on_report_done, pass_args=True))
         w.finished.connect(
             lambda worker=w: self._forget_worker("_report_workers", worker))
         self._report_workers.append(w)
@@ -3747,8 +3897,6 @@ class MainWindow(QWidget):
 
     def _on_report_done(self, seq, rel, report, err):
         self._report_workers = [w for w in self._report_workers if w.isRunning()]
-        if report is not None:
-            self._report_cache[rel] = report
         if seq != self._report_seq:
             return  # user moved to another dataset; ignore stale result
         if report is None:
@@ -4341,6 +4489,15 @@ class MainWindow(QWidget):
             workers.remove(worker)
         worker.deleteLater()
 
+    def _qt_object_alive(self, obj):
+        """True while a PySide wrapper still points at a live C++ QObject."""
+        if obj is None:
+            return False
+        try:
+            return bool(qt_is_valid(obj))
+        except RuntimeError:
+            return False
+
     def _on_one_shot_worker_finished(self, attr, worker=None):
         """Release an owned one-shot QThread after its native thread is stopped."""
         worker = worker or self.sender()
@@ -4348,9 +4505,37 @@ class MainWindow(QWidget):
             setattr(self, attr, None)
         if worker is self.worker:
             self.worker = None
-        self._set_busy(False)
+        self._refresh_action_states()
         if worker is not None:
             worker.deleteLater()
+
+    def _handle_ui_exception(self, action, exc, *, stop_speed=True):
+        """Report an exception raised by a main-thread Qt slot without crashing."""
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        if stop_speed and hasattr(self, "speed_timer"):
+            self._stop_speed()
+        msg = f"{action}失败: {exc}"
+        if hasattr(self, "status"):
+            self.status.setText(msg)
+        if not getattr(self, "_closing", False):
+            try:
+                QMessageBox.critical(self, "错误", msg)
+            except Exception:
+                pass
+
+    def _guarded(self, action, func, *, pass_args=False, stop_speed=True):
+        """Wrap Qt callbacks so Python exceptions do not escape the event loop."""
+        def wrapped(*args, **kwargs):
+            if getattr(self, "_closing", False):
+                return None
+            try:
+                if pass_args:
+                    return func(*args, **kwargs)
+                return func()
+            except Exception as exc:
+                self._handle_ui_exception(action, exc, stop_speed=stop_speed)
+                return None
+        return wrapped
 
     def _on_identity(self, seq, name, has_token, org, count):
         # Only the most recent check may update the label — a slower older worker
@@ -4403,7 +4588,12 @@ class MainWindow(QWidget):
             if not qw.wait(8000):
                 qw.terminate()
                 qw.wait(2000)
-        for name in ("worker", "_pull_worker", "_check_worker", "dl_worker",
+        for w in list(self._download_workers):
+            if w.isRunning():
+                if not w.wait(5000):
+                    w.terminate()
+                    w.wait(2000)
+        for name in ("worker", "_pull_worker", "_check_worker",
                      "_edit_worker", "_push_worker", "_op_worker"):
             w = getattr(self, name, None)
             if w is not None and hasattr(w, "wait") and w.isRunning():
@@ -4425,16 +4615,41 @@ class MainWindow(QWidget):
         super().closeEvent(event)
 
     # ---- Button handlers -------------------------------------------------- #
-    def _set_busy(self, busy):
-        for b in (self.btn_pull, self.btn_stats, self.btn_download,
-                  self.btn_check, self.btn_manual_stats, self.btn_open):
-            b.setEnabled(not busy)
-        # Edit-tab actions share the busy lock so a copy/push can't overlap a pull.
+    def _refresh_action_states(self):
+        global_busy = any(
+            getattr(self, attr, None) is not None
+            for attr in ("_pull_worker", "_check_worker",
+                         "_edit_worker", "_push_worker", "_op_worker"))
+        stats_busy = getattr(self, "_stats_worker", None) is not None
+        downloads_busy = bool(getattr(self, "_download_workers", ()))
+        any_busy = global_busy or stats_busy or downloads_busy
+
+        self.btn_pull.setEnabled(
+            not global_busy and not stats_busy and not downloads_busy)
+        self.btn_stats.setEnabled(not global_busy and not stats_busy)
+        self.btn_download.setEnabled(not global_busy)
+        self.btn_check.setEnabled(
+            not global_busy and not stats_busy and not downloads_busy)
+        self.btn_manual_stats.setEnabled(
+            not global_busy and not stats_busy and not downloads_busy)
+        self.btn_open.setEnabled(not any_busy)
         if hasattr(self, "btn_make_copy"):
-            self.btn_make_copy.setEnabled(not busy)
-            self.btn_run_op.setEnabled(not busy)
+            self.btn_make_copy.setEnabled(not any_busy)
+            self.btn_run_op.setEnabled(not any_busy)
             self.btn_push_copy.setEnabled(
-                not busy and self._last_copy_dir is not None)
+                not any_busy and self._last_copy_dir is not None)
+
+    def _set_busy(self, busy):
+        if busy:
+            for b in (self.btn_pull, self.btn_stats, self.btn_download,
+                      self.btn_check, self.btn_manual_stats, self.btn_open):
+                b.setEnabled(False)
+            if hasattr(self, "btn_make_copy"):
+                self.btn_make_copy.setEnabled(False)
+                self.btn_run_op.setEnabled(False)
+                self.btn_push_copy.setEnabled(False)
+        else:
+            self._refresh_action_states()
 
     def on_pull(self):
         org = self.org_combo.currentText().strip()
@@ -4453,91 +4668,211 @@ class MainWindow(QWidget):
         self.worker = worker
         self._pull_worker = worker
         worker.log.connect(self.status.setText)
-        worker.progress.connect(self._on_progress)
-        worker.done.connect(self._on_pull_done)
-        worker.error.connect(self._on_pull_error)
-        worker.finished.connect(self._on_pull_worker_finished)
+        worker.progress.connect(
+            self._guarded("刷新同步进度", self._on_progress, pass_args=True))
+        worker.done.connect(
+            self._guarded("完成同步全部数据集", self._on_pull_done, pass_args=True))
+        worker.error.connect(
+            self._guarded("同步全部数据集", self._on_pull_error, pass_args=True))
+        worker.finished.connect(
+            self._guarded("结束同步全部数据集", self._on_pull_worker_finished))
         worker.start()
 
     def on_download_selected(self):
-        """Download ONLY the dataset selected in the 看板 table (fast path)."""
-        d = self._selected_dataset()
-        if not d or not d.get("dataset_name"):
+        """Download/sync all datasets selected in the 看板 table in parallel."""
+        datasets = self._selected_datasets()
+        if not datasets:
             QMessageBox.warning(self, "提示", "请先在「看板」表格里选中一个数据集。")
             return
-        repo_id = d["dataset_name"]
-        self._set_busy(True)
-        self.bar.setMaximum(0)  # indeterminate — a single snapshot download
+        if not self._download_workers:
+            self._download_started = 0
+            self._download_completed = 0
+            self._download_successes = []
+            self._download_failures = []
+        running = {w.repo_id for w in self._download_workers}
+        pending = [
+            d for d in datasets
+            if d.get("dataset_name") not in running
+        ]
+        if not pending:
+            selected_names = {d.get("dataset_name") for d in datasets}
+            if selected_names and selected_names.issubset(running):
+                msg = "选中的数据集已在下载/同步中。"
+            else:
+                msg = "选中的数据集已在下载/同步中，未重复启动。"
+            QMessageBox.information(self, "提示", msg)
+            return
+
         self._watch_dir = Path(OUT_DIR)
         self._prev_bytes = dir_size(self._watch_dir)
         self._prev_t = time.monotonic()
         self.speed_label.setText("0.0 B/s")
-        self.speed_timer.start()
-        self.status.setText(f"开始下载 {repo_id} ...")
-        worker = DownloadOneWorker(repo_id, OUT_DIR, self.token)
-        self.dl_worker = worker
-        worker.log.connect(self.status.setText)
-        worker.done.connect(self._on_download_one_done)
-        worker.error.connect(self._on_download_error)
-        worker.finished.connect(self._on_download_worker_finished)
-        worker.start()
+        if not self.speed_timer.isActive():
+            self.speed_timer.start()
+        for d in pending:
+            repo_id = d["dataset_name"]
+            self._download_started += 1
+            worker = DownloadOneWorker(repo_id, OUT_DIR, self.token)
+            self._download_workers.append(worker)
+            worker.log.connect(self.status.setText)
+            worker.done.connect(
+                self._guarded("完成下载数据集", self._on_download_one_done, pass_args=True))
+            worker.error.connect(
+                self._guarded("下载数据集", self._on_download_error, pass_args=True))
+            worker.finished.connect(
+                self._guarded("结束下载数据集", self._on_download_worker_finished))
+            worker.start()
+        skipped = len(datasets) - len(pending)
+        suffix = f"，跳过下载/同步中 {skipped} 个" if skipped else ""
+        self.status.setText(f"开始下载/同步 {len(pending)} 个数据集{suffix} ...")
+        self._refresh_download_progress()
+        self._refresh_action_states()
 
     def _on_download_one_done(self, local_dir):
-        self._stop_speed()
-        self.bar.setMaximum(1)
-        self.bar.setValue(1)
-        self._refresh_table()  # the newly downloaded row now shows 已下载
-        self._download_done_path = local_dir
-        msg = f"下载完成: {local_dir}"
-        self.status.setText(msg)
+        refresh_ok = True
+        try:
+            # The newly downloaded row now shows 已下载.  Keep this guarded:
+            # it runs in the GUI thread after a background worker completes.
+            self._refresh_table()
+        except Exception as exc:
+            refresh_ok = False
+            self._handle_ui_exception("下载完成后刷新表格", exc, stop_speed=False)
+        if refresh_ok and self._download_workers:
+            self.status.setText(f"下载/同步完成: {local_dir}")
+        self._refresh_download_progress()
 
     def _on_download_error(self, msg):
-        """Show a download failure; finished releases the worker/busy lock."""
-        self._stop_speed()
-        self._download_done_path = ""
+        """Show a download failure; other workers keep running."""
+        worker = self.sender()
+        if worker is not None:
+            try:
+                worker.error_msg = msg
+            except RuntimeError:
+                pass
         self.status.setText(f"错误: {msg}")
         QMessageBox.critical(self, "错误", msg)
+        self._refresh_download_progress()
 
     def _on_download_worker_finished(self):
-        """Release the download worker only after QThread has stopped."""
+        """Finalize the download UI and release the worker after QThread stops.
+
+        With multiple workers, this slot owns the final batch summary; the done
+        signal only refreshes the table and status as each dataset lands.
+        """
         worker = self.sender()
-        if worker is self.dl_worker:
-            self.dl_worker = None
-        self._set_busy(False)
-        if worker is not None:
-            worker.deleteLater()
-        local_dir = self._download_done_path
-        self._download_done_path = ""
-        if local_dir:
+        worker_alive = self._qt_object_alive(worker)
+        local_dir = ""
+        error_msg = ""
+        if worker_alive:
+            try:
+                local_dir = worker.local_dir
+                error_msg = worker.error_msg
+            except RuntimeError:
+                worker_alive = False
+
+        if worker_alive and worker in self._download_workers:
+            self._download_workers.remove(worker)
+            if local_dir:
+                self._download_successes.append(local_dir)
+            elif error_msg:
+                self._download_failures.append(error_msg)
+            self._download_completed += 1
+        elif worker_alive:
+            if local_dir:
+                self._download_successes.append(local_dir)
+            elif error_msg:
+                self._download_failures.append(error_msg)
+        if worker_alive:
+            self._retired_download_workers.append(worker)
+            QTimer.singleShot(
+                DOWNLOAD_WORKER_RELEASE_DELAY_MS,
+                lambda w=worker: self._release_download_worker(w))
+        self._refresh_download_progress()
+        if not self._download_workers:
+            self._finish_download_batch()
+        self._refresh_action_states()
+
+    def _release_download_worker(self, worker):
+        """Release a finished download QThread after queued signals settle."""
+        try:
+            if worker in self._retired_download_workers:
+                self._retired_download_workers.remove(worker)
+            if self._qt_object_alive(worker):
+                worker.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _refresh_download_progress(self):
+        if self._download_workers:
+            if not self.speed_timer.isActive():
+                self.speed_timer.start()
+            self.bar.setMaximum(max(self._download_started, 1))
+            self.bar.setValue(self._download_completed)
+        elif self._pull_worker is None and self._stats_worker is None:
+            self._stop_speed()
+
+    def _finish_download_batch(self):
+        self._stop_speed()
+        ok = len(self._download_successes)
+        failed = len(self._download_failures)
+        if ok == 1 and not failed:
+            msg = f"下载/同步完成: {self._download_successes[0]}"
+        elif ok and not failed:
+            msg = f"下载/同步完成: {ok} 个数据集"
+        elif ok:
+            msg = f"下载/同步完成: {ok} 个，失败 {failed} 个"
+        else:
+            msg = f"下载/同步失败: {failed} 个数据集"
+        self.status.setText(msg)
+        self.bar.setMaximum(1)
+        self.bar.setValue(1 if ok else 0)
+        if ok:
+            lines = list(self._download_successes[:10])
+            if len(self._download_successes) > 10:
+                lines.append(
+                    f"… 其余 {len(self._download_successes) - 10} 个")
+            if failed:
+                lines.append(f"失败 {failed} 个数据集")
             box = QMessageBox(
-                QMessageBox.Information, "完成", f"已下载到本地:\n{local_dir}",
+                QMessageBox.Information, "完成", "\n".join(lines),
                 QMessageBox.Ok, self)
             box.setAttribute(Qt.WA_DeleteOnClose)
             self._download_message_box = box
             box.finished.connect(
                 lambda *_: setattr(self, "_download_message_box", None))
             box.open()
+        self._download_successes = []
+        self._download_failures = []
+        self._download_started = 0
+        self._download_completed = 0
 
     def on_stats(self):
         org = self.org_combo.currentText().strip()
         if not org:
             QMessageBox.warning(self, "提示", "请填写组织名。")
             return
-        self._set_busy(True)
+        if self._stats_worker is not None:
+            QMessageBox.warning(self, "提示", "刷新统计已在运行。")
+            return
         self.bar.setValue(0)
         self.status.setText(f"开始统计 {org}（仅读取信息，不下载）...")
         worker = StatsWorker(org, self.token)
         self.worker = worker
         self._stats_worker = worker
         worker.log.connect(self.status.setText)
-        worker.progress.connect(self._on_progress)
-        worker.done.connect(self._on_stats_done)
+        worker.progress.connect(
+            self._guarded("刷新统计进度", self._on_progress, pass_args=True))
+        worker.done.connect(
+            self._guarded("完成刷新统计", self._on_stats_done, pass_args=True))
         # Keep the busy lock until QThread.run() has actually returned.  The
         # worker emits done just before returning, so unlocking in _on_stats_done
         # allowed a second click to replace a still-running QThread.
-        worker.error.connect(self._on_stats_error)
-        worker.finished.connect(self._on_stats_worker_finished)
+        worker.error.connect(
+            self._guarded("刷新统计", self._on_stats_error, pass_args=True))
+        worker.finished.connect(
+            self._guarded("结束刷新统计", self._on_stats_worker_finished))
         worker.start()
+        self._refresh_action_states()
 
     def _on_stats_error(self, msg):
         """Show a stats failure; _on_stats_worker_finished unlocks the UI."""
@@ -4552,7 +4887,8 @@ class MainWindow(QWidget):
             self._stats_worker = None
         if worker is self.worker:
             self.worker = None
-        self._set_busy(False)
+        self._refresh_action_states()
+        self._refresh_download_progress()
         if worker is not None:
             worker.deleteLater()
 
@@ -4651,7 +4987,12 @@ class MainWindow(QWidget):
 
     def _tick_speed(self):
         now = time.monotonic()
-        cur = dir_size(self._watch_dir)
+        try:
+            cur = dir_size(self._watch_dir)
+        except Exception as exc:
+            self.speed_timer.stop()
+            self.status.setText(f"测速暂停: {exc}")
+            return
         elapsed = now - (self._prev_t or now)
         if elapsed > 0:
             self.speed_label.setText(fmt_speed((cur - self._prev_bytes) / elapsed))
@@ -4669,18 +5010,23 @@ class MainWindow(QWidget):
 
     def _on_pull_done(self, report, out_path):
         self._stop_speed()
-        self.report = report
-        self.history = dd.load_history(
-            OUT_DIR, org=report.get("org"))  # new snapshot just written
-        self.hf_changes = dd.load_hf_change_history()
-        self._refresh_all()
-        self._hide_stale_banner()  # data is now live
-        fails = len(report.get("failures", []))
-        msg = f"拉取完成: {report['count']}/{report['requested']} 个数据集"
-        if fails:
-            msg += f"，{fails} 个失败"
-        self.status.setText(
-            msg + (f"  ->  {out_path}" if out_path else ""))
+        try:
+            self.report = report
+            self.history = dd.load_history(
+                OUT_DIR, org=report.get("org"))  # new snapshot just written
+            self.hf_changes = dd.load_hf_change_history()
+            self._refresh_all()
+            self._hide_stale_banner()  # data is now live
+            fails = len(report.get("failures", []))
+            msg = (
+                f"拉取完成: {report.get('count', 0)}/"
+                f"{report.get('requested', 0)} 个数据集")
+            if fails:
+                msg += f"，{fails} 个失败"
+            self.status.setText(
+                msg + (f"  ->  {out_path}" if out_path else ""))
+        except Exception as exc:
+            self._handle_ui_exception("拉取完成后刷新界面", exc, stop_speed=False)
 
     def _on_pull_error(self, msg):
         """Show a pull failure; finished releases the worker/busy lock."""
@@ -4695,30 +5041,37 @@ class MainWindow(QWidget):
             self._pull_worker = None
         if worker is self.worker:
             self.worker = None
-        self._set_busy(False)
+        self._refresh_action_states()
+        self._refresh_download_progress()
         if worker is not None:
             worker.deleteLater()
 
     def _on_stats_done(self, report):
-        self.report = report
-        # Record the day's totals so 趋势 / 今日新增 have a daily baseline. 统计
-        # produces per-dataset detail (from each info.json), so this snapshot is
-        # a full baseline — previously only 拉取 wrote history, which is why days
-        # that were only 统计'd never showed up.
-        hist_note = ""
         try:
-            dd.append_pull(report)
-            self.history = dd.load_history(OUT_DIR)
-            self.hf_changes = dd.load_hf_change_history()
-        except OSError as exc:
-            hist_note = f"（历史未写入: {exc}）"
-        self._refresh_all()
-        self._hide_stale_banner()  # data is now live
-        fails = len(report.get("failures", []))
-        msg = f"统计完成: {report['count']}/{report['requested']} 个数据集，共 {report['total_hours']} 小时"
-        if fails:
-            msg += f"，{fails} 个读取失败"
-        self.status.setText(msg + hist_note)
+            self.report = report
+            # Record the day's totals so 趋势 / 今日新增 have a daily baseline. 统计
+            # produces per-dataset detail (from each info.json), so this snapshot is
+            # a full baseline — previously only 拉取 wrote history, which is why days
+            # that were only 统计'd never showed up.
+            hist_note = ""
+            try:
+                dd.append_pull(report)
+                self.history = dd.load_history(OUT_DIR)
+                self.hf_changes = dd.load_hf_change_history()
+            except Exception as exc:
+                hist_note = f"（历史未写入: {exc}）"
+            self._refresh_all()
+            self._hide_stale_banner()  # data is now live
+            fails = len(report.get("failures", []))
+            msg = (
+                f"统计完成: {report.get('count', 0)}/"
+                f"{report.get('requested', 0)} 个数据集，"
+                f"共 {report.get('total_hours', 0)} 小时")
+            if fails:
+                msg += f"，{fails} 个读取失败"
+            self.status.setText(msg + hist_note)
+        except Exception as exc:
+            self._handle_ui_exception("统计完成后刷新界面", exc, stop_speed=False)
 
     def on_check(self):
         org = self.org_combo.currentText().strip()
@@ -4730,8 +5083,10 @@ class MainWindow(QWidget):
         worker = CheckWorker(org, OUT_DIR, self.token)
         self.worker = worker
         self._check_worker = worker
-        worker.result.connect(self._on_check_result)
-        worker.error.connect(self._on_worker_error)
+        worker.result.connect(
+            self._guarded("显示新增检查结果", self._on_check_result, pass_args=True))
+        worker.error.connect(
+            self._guarded("检查新增", self._on_worker_error, pass_args=True))
         worker.finished.connect(
             lambda worker=worker:
             self._on_one_shot_worker_finished("_check_worker", worker))
@@ -4759,7 +5114,7 @@ class MainWindow(QWidget):
 
     def _on_error(self, msg):
         self._stop_speed()
-        self._set_busy(False)
+        self._refresh_action_states()
         self.status.setText(f"错误: {msg}")
         QMessageBox.critical(self, "错误", msg)
 

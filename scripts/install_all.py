@@ -38,7 +38,7 @@ def main() -> int:
         help="Install the GUI/checker dependencies but skip LeRobot dataset ops.")
     parser.add_argument(
         "--skip-viewer", action="store_true",
-        help="Skip viewer submodule initialization and Bun dependencies.")
+        help="Skip viewer runtime preparation and Bun dependencies.")
     args = parser.parse_args()
 
     req = "requirements.txt" if args.skip_lerobot else "requirements-full.txt"
